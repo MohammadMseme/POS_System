@@ -41,10 +41,66 @@ class HouseholdStoreApp extends StatelessWidget {
       title: 'إدارة معرض الأدوات المنزلية',
       debugShowCheckedModeBanner: false,
       locale: const Locale('ar', ''),
+      // الثيم العام المطور والموحد لكل التطبيق باللون الأزرق العصري
       theme: ThemeData(
         useMaterial3: true,
-        colorSchemeSeed: Colors.blue,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          primary: const Color(0xFF1565C0), // أزرق غامق احترافي وبارز
+          secondary: const Color(0xFF42A5F5), // أزرق فاتح مكمل
+          surface: Colors.grey.shade50,     // خلفية عامة مريحة للعين
+        ),
         fontFamily: 'Segoe UI',
+        
+        // 1. توحيد شكل شريط العنوان (AppBar) في كافة الواجهات
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF1565C0),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          centerTitle: true,
+        ),
+
+        // 2. توحيد شكل البطاقات (Cards) لتكون بحواف دائرية ناعمة وحدود نظيفة
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: Colors.grey.shade200),
+          ),
+          color: Colors.white,
+        ),
+
+        // 3. توحيد شكل حقول الإدخال (TextFormFields) في كل الشاشات
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFF1565C0), width: 2),
+          ),
+        ),
+
+        // 4. توحيد شكل الأزرار البارزة (ElevatedButtons)
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF1565C0),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            elevation: 0,
+          ),
+        ),
       ),
       home: const MainNavigationScreen(),
     );
