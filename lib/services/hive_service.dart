@@ -30,8 +30,8 @@ class HiveService {
     if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(SupplierAdapter());
     if (!Hive.isAdapterRegistered(5)) Hive.registerAdapter(DebtAdapter());
     if (!Hive.isAdapterRegistered(6)) Hive.registerAdapter(NoteAdapter());
-    // NEW: enum adapter backing Sale.source (typeId 7 - does not collide
-    // with any existing model typeId 0-6).
+    // enum adapter backing Sale.source (typeId 7 - does not collide with
+    // any existing model typeId 0-6).
     if (!Hive.isAdapterRegistered(7)) Hive.registerAdapter(SaleSourceAdapter());
 
     // فتح الصناديق مع المعالجة الآمنة
@@ -40,6 +40,14 @@ class HiveService {
     await _openBoxSafely<Supplier>('suppliers');
     await _openBoxSafely<Debt>('debts');
     await _openBoxSafely<Note>('notes');
+
+    // NEW: 'settings' box backs AuthProvider (the app password) and any
+    // future local app preferences. It stores plain Strings, so no
+    // custom Hive TypeAdapter/typeId is required - String is one of the
+    // primitive types Hive supports natively. Kept in the exact same
+    // safe-open path as every other box, so a corrupted settings file is
+    // quarantined (never deleted) just like the rest.
+    await _openBoxSafely<String>('settings');
   }
 
   /// Opens a box, and if that fails, NEVER deletes the underlying data.

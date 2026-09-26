@@ -1,8 +1,8 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/product_provider.dart';
 import '../models/product.dart';
+import '../services/Barcode_print_service.dart';
 
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key});
@@ -34,6 +34,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   void _showAddOrEditProductDialog({Product? product}) {
+    // Captured once, before any edits: needed so we can tell the provider
+    // which box key to move the record FROM if the barcode field changes.
+    final String? oldBarcode = product?.barcode;
+
     if (product != null) {
       _barcodeController.text = product.barcode;
       _nameController.text = product.name;
@@ -188,7 +192,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
             ),
-            onPressed: () {
+            onPressed: () async {
               if (_formKey.currentState!.validate()) {
                 final provider =
                     Provider.of<ProductProvider>(context, listen: false);
@@ -242,21 +246,59 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       ),
                     );
                   }
+
+                  // NEW: barcode label printing. Triggered for any
+                  // successful add - whether it created a brand-new
+                  // product record or merged into an existing one - but
+                  // never after a rejected (barcode-conflict) attempt,
+                  // since no stock actually entered in that case.
+                  // `newProduct.stockQuantity` is exactly the quantity
+                  // just typed into this dialog, unaffected by whichever
+                  // branch addProductWithRules took internally, so the
+                  // label count always matches "the initial quantity of
+                  // the added product stock" as entered here.
+                  if (result != 'rejected_barcode_conflict') {
+                    await _promptPrintBarcodes(newProduct);
+                  }
                 } else {
-                  product.barcode =
-                      _barcodeController.text.trim();
-                  product.name =
-                      _nameController.text.trim();
-                  product.costPrice =
-                      double.parse(_costPriceController.text);
-                  product.sellPrice =
-                      double.parse(_sellPriceController.text);
-                  product.stockQuantity =
-                      int.parse(_stockController.text);
+                  // FIXED: previously mutated `product` fields directly
+                  // then called `product.save()`, which always writes
+                  // under the product's ORIGINAL box key. If the barcode
+                  // field was edited, the box key and product.barcode
+                  // would silently drift apart. updateProduct() now
+                  // handles re-keying atomically and reports a conflict
+                  // instead of corrupting state.
+                  final result = await provider.updateProduct(
+                    product,
+                    oldBarcode: oldBarcode ?? product.barcode,
+                    barcode: _barcodeController.text.trim(),
+                    name: _nameController.text.trim(),
+                    costPrice: double.parse(_costPriceController.text),
+                    sellPrice: double.parse(_sellPriceController.text),
+                    stockQuantity: int.parse(_stockController.text),
+                  );
 
-                  provider.updateProduct(product);
-
+                  if (!dialogContext.mounted) return;
                   Navigator.pop(dialogContext);
+
+                  if (!context.mounted) return;
+                  if (result == 'rejected_barcode_conflict') {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'خطأ: هذا الباركود مسجل مسبقاً لصنف آخر! تم إلغاء حفظ التعديل.',
+                        ),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('تم حفظ التعديلات بنجاح.'),
+                        backgroundColor: Colors.blue,
+                      ),
+                    );
+                  }
                 }
               }
             },
@@ -264,6 +306,164 @@ class _ProductsScreenState extends State<ProductsScreen> {
         ],
       ),
     );
+  }
+
+  // NEW: asks whether to print barcode labels right after a successful
+  // add, then (if confirmed) hands off to BarcodePrintService. `product`
+  // here is the plain, locally-built Product used to populate the form -
+  // printing only needs its name/barcode strings, so there's no need to
+  // re-fetch anything from Hive for this.
+  Future<void> _promptPrintBarcodes(Product product) async {
+    final quantity = product.stockQuantity;
+
+    final shouldPrint = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.qr_code_2_outlined, color: Colors.blue.shade700),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text('طباعة الباركود', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+        content: Text(
+          'هل تريد طباعة ملصقات الباركود لهذا المنتج؟\n'
+          'سيتم طباعة $quantity ملصق (بعدد الكمية المضافة).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('لا، شكراً'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.print_outlined),
+            label: const Text('نعم، اطبع'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldPrint != true) return;
+    if (!mounted) return;
+
+    await _printLabels(product, quantity);
+  }
+
+  Future<void> _printLabels(Product product, int quantity) async {
+    // A small non-dismissible progress indicator while the printer
+    // picker/print job is in flight - printer selection and the print
+    // handoff can both take a moment, and this keeps the screen from
+    // feeling stuck with no feedback.
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    bool success = false;
+    Object? error;
+
+    try {
+      success = await BarcodePrintService.printProductLabels(
+        context: context,
+        product: product,
+        copies: quantity,
+      );
+    } catch (e) {
+      error = e;
+    }
+
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop(); // close the progress dialog
+
+    if (!mounted) return;
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('حدث خطأ أثناء الطباعة: $error'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } else if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم إرسال ملصقات الباركود إلى الطابعة بنجاح'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم إلغاء عملية الطباعة'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+
+  // NEW: confirmation dialog before destructive product deletion. Previously
+  // the popup menu deleted the product immediately with no way back.
+  Future<void> _confirmDeleteProduct(Product product) async {
+    final provider = Provider.of<ProductProvider>(context, listen: false);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.delete_outline, color: Colors.red.shade700),
+            const SizedBox(width: 10),
+            const Text('حذف المنتج', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(
+          'هل أنت متأكد من حذف "${product.name}" نهائياً؟ لا يمكن التراجع عن هذا الإجراء.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('حذف نهائياً'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      provider.deleteProduct(product);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('تم حذف "${product.name}"'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildStatCard({
@@ -331,7 +531,6 @@ class _ProductsScreenState extends State<ProductsScreen> {
   Widget _buildProductCard(
     BuildContext context,
     Product product,
-    ProductProvider productProvider,
   ) {
     final bool lowStock = product.stockQuantity <= 5;
 
@@ -493,7 +692,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
                 if (value == 'edit') {
                   _showAddOrEditProductDialog(product: product);
                 } else if (value == 'delete') {
-                  productProvider.deleteProduct(product);
+                  // CHANGED: now requires explicit confirmation first.
+                  _confirmDeleteProduct(product);
                 }
               },
               itemBuilder: (context) => const [
@@ -663,9 +863,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
             const SizedBox(height: 14),
             Row(
               children: [
-                Text(
+                const Text(
                   'المنتجات',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
@@ -724,7 +924,6 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         return _buildProductCard(
                           context,
                           product,
-                          productProvider,
                         );
                       },
                     ),
@@ -735,4 +934,3 @@ class _ProductsScreenState extends State<ProductsScreen> {
     );
   }
 }
-

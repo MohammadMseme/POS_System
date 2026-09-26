@@ -14,6 +14,10 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
+  // Suppliers are archived (not deleted) once fully paid, so we need a
+  // way to see them again instead of them vanishing from the UI.
+  bool _showArchived = false;
+
   @override
   void initState() {
     super.initState();
@@ -29,6 +33,19 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  // NEW: full payment-history detail view. Works for both active and
+  // archived suppliers - tapping an archived (fully-paid) supplier is
+  // now the only way to see their history again, since they no longer
+  // appear in the active list or the summary totals.
+  void _showSupplierDetail(BuildContext context, Supplier supplier) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _SupplierDetailSheet(supplier: supplier),
+    );
   }
 
   void _showPaymentDialog(
@@ -329,7 +346,10 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
           ),
         ],
       ),
-    );
+    ).then((_) {
+      payController.dispose();
+      noteController.dispose();
+    });
   }
 
   void _showAddSupplierDialog(BuildContext context) {
@@ -458,7 +478,11 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
           ),
         ],
       ),
-    );
+    ).then((_) {
+      nameController.dispose();
+      remainingController.dispose();
+      noteController.dispose();
+    });
   }
 
   Widget _buildSummaryCard({
@@ -532,13 +556,51 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     );
   }
 
+  Widget _buildToggleButton({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? Colors.indigo : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 16, color: selected ? Colors.white : Colors.grey.shade600),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: selected ? Colors.white : Colors.grey.shade700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final supplierProvider =
         Provider.of<DebtSupplierProvider>(context);
 
-    final filteredSuppliers =
-        supplierProvider.suppliers.where((s) {
+    final baseList = _showArchived
+        ? supplierProvider.archivedSuppliers
+        : supplierProvider.activeSuppliers;
+
+    final filteredSuppliers = baseList.where((s) {
       return s.name
           .toLowerCase()
           .contains(
@@ -547,14 +609,14 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     }).toList();
 
     final totalRemaining =
-        supplierProvider.suppliers.fold<double>(
+        supplierProvider.activeSuppliers.fold<double>(
       0.0,
       (sum, supplier) =>
           sum + supplier.remainingAmount,
     );
 
     final totalSuppliers =
-        supplierProvider.suppliers.length;
+        supplierProvider.activeSuppliers.length;
 
     final totalPayments =
         supplierProvider.suppliers.fold<int>(
@@ -585,6 +647,23 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
             ),
           ],
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: ElevatedButton.icon(
+              onPressed: () => _showAddSupplierDialog(context),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('إضافة / تحديث'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.indigo,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(18),
@@ -594,7 +673,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
               children: [
                 _buildSummaryCard(
                   icon: Icons.business_outlined,
-                  title: 'عدد الموردين',
+                  title: 'الموردون النشطون',
                   value: '$totalSuppliers',
                   color: Colors.indigo,
                 ),
@@ -615,6 +694,40 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                   color: Colors.teal,
                 ),
               ],
+            ),
+
+            const SizedBox(height: 16),
+
+            // Active / Archived segmented toggle. Archived suppliers are
+            // the ones that were paid off in full - tap any card (in
+            // either tab) to open the full payment-history detail sheet.
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              padding: const EdgeInsets.all(4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _buildToggleButton(
+                      label: 'نشطون',
+                      icon: Icons.local_shipping_outlined,
+                      selected: !_showArchived,
+                      onTap: () => setState(() => _showArchived = false),
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildToggleButton(
+                      label: 'مؤرشفون (تم السداد)',
+                      icon: Icons.archive_outlined,
+                      selected: _showArchived,
+                      onTap: () => setState(() => _showArchived = true),
+                    ),
+                  ),
+                ],
+              ),
             ),
 
             const SizedBox(height: 16),
@@ -666,7 +779,27 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
               ),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
+
+            Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.touch_app_outlined, size: 14, color: Colors.grey.shade500),
+                    const SizedBox(width: 4),
+                    Text(
+                      'اضغط على أي بطاقة لعرض كامل سجل الدفعات',
+                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 4),
 
             Expanded(
               child: filteredSuppliers.isEmpty
@@ -693,9 +826,11 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            _searchQuery.isEmpty
-                                ? 'لا توجد حسابات موردين حالياً'
-                                : 'لا يوجد مورد مطابق لـ "$_searchQuery"',
+                            _searchQuery.isNotEmpty
+                                ? 'لا يوجد مورد مطابق لـ "$_searchQuery"'
+                                : _showArchived
+                                    ? 'لا يوجد موردون مؤرشفون حالياً'
+                                    : 'لا توجد حسابات موردين نشطة حالياً',
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 17,
@@ -721,16 +856,9 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                           margin: const EdgeInsets.only(
                             bottom: 10,
                           ),
-                          padding:
-                              const EdgeInsets.all(15),
                           decoration: BoxDecoration(
-                            color: Colors.white,
                             borderRadius:
                                 BorderRadius.circular(15),
-                            border: Border.all(
-                              color:
-                                  Colors.grey.shade200,
-                            ),
                             boxShadow: [
                               BoxShadow(
                                 color: Colors.black
@@ -743,143 +871,174 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                               ),
                             ],
                           ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 52,
-                                height: 52,
+                          child: Material(
+                            color: Colors.white,
+                            borderRadius:
+                                BorderRadius.circular(15),
+                            child: InkWell(
+                              borderRadius:
+                                  BorderRadius.circular(15),
+                              // NEW: tap anywhere on the card to open the
+                              // full payment-history detail sheet.
+                              onTap: () =>
+                                  _showSupplierDetail(context, s),
+                              child: Container(
+                                padding:
+                                    const EdgeInsets.all(15),
                                 decoration: BoxDecoration(
-                                  color:
-                                      Colors.indigo.shade50,
                                   borderRadius:
-                                      BorderRadius.circular(
-                                    12,
+                                      BorderRadius.circular(15),
+                                  border: Border.all(
+                                    color:
+                                        Colors.grey.shade200,
                                   ),
                                 ),
-                                child: Icon(
-                                  Icons
-                                      .local_shipping_outlined,
-                                  color:
-                                      Colors.indigo.shade700,
-                                  size: 28,
-                                ),
-                              ),
-
-                              const SizedBox(width: 14),
-
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment
-                                          .start,
+                                child: Row(
                                   children: [
-                                    Text(
-                                      s.name,
-                                      style:
-                                          const TextStyle(
-                                        fontSize: 17,
-                                        fontWeight:
-                                            FontWeight.bold,
-                                      ),
-                                    ),
-                                    const SizedBox(
-                                        height: 5),
-                                    Text(
-                                      'عدد الدفعات: ${s.payments.length}',
-                                      style: TextStyle(
-                                        color: Colors
-                                            .grey.shade600,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                    if (s.notes.isNotEmpty)
-                                      Padding(
-                                        padding:
-                                            const EdgeInsets
-                                                .only(
-                                          top: 3,
+                                    Container(
+                                      width: 52,
+                                      height: 52,
+                                      decoration: BoxDecoration(
+                                        color: s.isPaid
+                                            ? Colors.green.shade50
+                                            : Colors.indigo.shade50,
+                                        borderRadius:
+                                            BorderRadius.circular(
+                                          12,
                                         ),
-                                        child: Text(
-                                          s.notes,
-                                          maxLines: 1,
-                                          overflow:
-                                              TextOverflow
-                                                  .ellipsis,
+                                      ),
+                                      child: Icon(
+                                        s.isPaid
+                                            ? Icons.check_circle_outline
+                                            : Icons.local_shipping_outlined,
+                                        color: s.isPaid
+                                            ? Colors.green.shade700
+                                            : Colors.indigo.shade700,
+                                        size: 28,
+                                      ),
+                                    ),
+
+                                    const SizedBox(width: 14),
+
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment
+                                                .start,
+                                        children: [
+                                          Text(
+                                            s.name,
+                                            style:
+                                                const TextStyle(
+                                              fontSize: 17,
+                                              fontWeight:
+                                                  FontWeight.bold,
+                                            ),
+                                          ),
+                                          const SizedBox(
+                                              height: 5),
+                                          Text(
+                                            'عدد الدفعات: ${s.payments.length}',
+                                            style: TextStyle(
+                                              color: Colors
+                                                  .grey.shade600,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                          if (s.notes.isNotEmpty)
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets
+                                                      .only(
+                                                top: 3,
+                                              ),
+                                              child: Text(
+                                                s.notes,
+                                                maxLines: 1,
+                                                overflow:
+                                                    TextOverflow
+                                                        .ellipsis,
+                                                style: TextStyle(
+                                                  color: Colors
+                                                      .blueGrey
+                                                      .shade600,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+
+                                    const SizedBox(width: 15),
+
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        Text(
+                                          s.isPaid
+                                              ? 'تم السداد بالكامل'
+                                              : '${s.remainingAmount.toStringAsFixed(2)} شيكل',
                                           style: TextStyle(
-                                            color: Colors
-                                                .blueGrey
-                                                .shade600,
-                                            fontSize: 12,
+                                            fontSize: 15,
+                                            fontWeight:
+                                                FontWeight.bold,
+                                            color: s.isPaid
+                                                ? Colors.green.shade700
+                                                : Colors.red.shade700,
                                           ),
                                         ),
-                                      ),
+                                        const SizedBox(height: 8),
+                                        if (!s.isPaid)
+                                          ElevatedButton.icon(
+                                            style:
+                                                ElevatedButton
+                                                    .styleFrom(
+                                              backgroundColor:
+                                                  Colors.teal,
+                                              foregroundColor:
+                                                  Colors.white,
+                                              elevation: 0,
+                                              padding:
+                                                  const EdgeInsets
+                                                      .symmetric(
+                                                horizontal: 14,
+                                                vertical: 10,
+                                              ),
+                                              shape:
+                                                  RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius
+                                                        .circular(
+                                                  9,
+                                                ),
+                                              ),
+                                            ),
+                                            icon: const Icon(
+                                              Icons.payment,
+                                              size: 17,
+                                            ),
+                                            onPressed: () =>
+                                                _showPaymentDialog(
+                                              context,
+                                              s,
+                                            ),
+                                            label: const Text(
+                                              'دفع دفعة',
+                                            ),
+                                          )
+                                        else
+                                          Icon(
+                                            Icons.chevron_left,
+                                            color: Colors.grey.shade400,
+                                          ),
+                                      ],
+                                    ),
                                   ],
                                 ),
                               ),
-
-                              const SizedBox(width: 15),
-
-                              Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    '${s.remainingAmount.toStringAsFixed(2)} شيكل',
-                                    style: TextStyle(
-                                      fontSize: 17,
-                                      fontWeight:
-                                          FontWeight.bold,
-                                      color:
-                                          s.remainingAmount >
-                                                  0
-                                              ? Colors.red
-                                                  .shade700
-                                              : Colors
-                                                  .green
-                                                  .shade700,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  ElevatedButton.icon(
-                                    style:
-                                        ElevatedButton
-                                            .styleFrom(
-                                      backgroundColor:
-                                          Colors.teal,
-                                      foregroundColor:
-                                          Colors.white,
-                                      elevation: 0,
-                                      padding:
-                                          const EdgeInsets
-                                              .symmetric(
-                                        horizontal: 14,
-                                        vertical: 10,
-                                      ),
-                                      shape:
-                                          RoundedRectangleBorder(
-                                        borderRadius:
-                                            BorderRadius
-                                                .circular(
-                                          9,
-                                        ),
-                                      ),
-                                    ),
-                                    icon: const Icon(
-                                      Icons.payment,
-                                      size: 17,
-                                    ),
-                                    onPressed: () =>
-                                        _showPaymentDialog(
-                                      context,
-                                      s,
-                                    ),
-                                    label: const Text(
-                                      'دفع دفعة',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                            ),
                           ),
                         );
                       },
@@ -892,3 +1051,252 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   }
 }
 
+/// Full payment-history detail sheet for a single supplier. Opened by
+/// tapping any supplier card - active or archived. Read-only: payments
+/// are still recorded through the existing "دفع دفعة" dialog so this
+/// sheet never has to worry about keeping itself in sync mid-payment.
+class _SupplierDetailSheet extends StatelessWidget {
+  final Supplier supplier;
+
+  const _SupplierDetailSheet({required this.supplier});
+
+  Widget _statTile(String label, String value, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: TextStyle(fontSize: 10.5, color: Colors.grey.shade700),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 5),
+            FittedBox(
+              child: Text(
+                value,
+                style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 14.5),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sortedPayments = [...supplier.payments]
+      ..sort((a, b) => b.date.compareTo(a.date));
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.72,
+      minChildSize: 0.4,
+      maxChildSize: 0.92,
+      expand: false,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 44,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: supplier.isPaid ? Colors.green.shade50 : Colors.indigo.shade50,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(
+                        supplier.isPaid ? Icons.check_circle_outline : Icons.local_shipping_outlined,
+                        color: supplier.isPaid ? Colors.green.shade700 : Colors.indigo.shade700,
+                        size: 26,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            supplier.name,
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: supplier.isPaid ? Colors.green.shade50 : Colors.orange.shade50,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              supplier.isPaid ? 'مؤرشف - تم السداد بالكامل' : 'حساب نشط',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: supplier.isPaid ? Colors.green.shade700 : Colors.orange.shade800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+              if (supplier.notes.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      supplier.notes,
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    _statTile('إجمالي التعامل', '${supplier.totalEverOwed.toStringAsFixed(2)} ₪', Colors.indigo),
+                    const SizedBox(width: 10),
+                    _statTile('إجمالي المسدد', '${supplier.totalPaid.toStringAsFixed(2)} ₪', Colors.green),
+                    const SizedBox(width: 10),
+                    _statTile(
+                      'المتبقي',
+                      '${supplier.remainingAmount.toStringAsFixed(2)} ₪',
+                      supplier.remainingAmount > 0 ? Colors.red : Colors.green,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  children: [
+                    Icon(Icons.history, size: 18, color: Colors.grey.shade700),
+                    const SizedBox(width: 6),
+                    Text(
+                      'سجل الدفعات (${sortedPayments.length})',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: sortedPayments.isEmpty
+                    ? Center(
+                        child: Text(
+                          'لا توجد دفعات مسجلة لهذا المورد',
+                          style: TextStyle(color: Colors.grey.shade500),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: scrollController,
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                        itemCount: sortedPayments.length,
+                        itemBuilder: (context, index) {
+                          final p = sortedPayments[index];
+                          final dateStr = '${p.date.year}-'
+                              '${p.date.month.toString().padLeft(2, '0')}-'
+                              '${p.date.day.toString().padLeft(2, '0')}  '
+                              '${p.date.hour.toString().padLeft(2, '0')}:'
+                              '${p.date.minute.toString().padLeft(2, '0')}';
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade50,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.check_circle_outline,
+                                    color: Colors.green.shade700,
+                                    size: 18,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${p.amountPaid.toStringAsFixed(2)} شيكل',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.green.shade700,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        dateStr,
+                                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                      ),
+                                      if (p.notes.isNotEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 2),
+                                          child: Text(
+                                            p.notes,
+                                            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  '#${sortedPayments.length - index}',
+                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade400, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}

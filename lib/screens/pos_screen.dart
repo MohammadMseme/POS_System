@@ -1,8 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/pos_provider.dart';
 import '../providers/product_provider.dart';
 import '../providers/debt_supplier_provider.dart';
+
+/// Restricts a text field to a non-negative decimal number with at most
+/// two decimal places (e.g. "5", "5.5", "10.25"), rejecting anything
+/// else - including a second decimal point, letters, or a 3rd decimal
+/// digit - as the user types, instead of accepting bad input and
+/// failing silently on parse.
+class _DecimalTextInputFormatter extends TextInputFormatter {
+  static final RegExp _pattern = RegExp(r'^\d*\.?\d{0,2}$');
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty) return newValue;
+    if (_pattern.hasMatch(newValue.text)) return newValue;
+    return oldValue;
+  }
+}
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -230,65 +250,80 @@ class _PosScreenState extends State<PosScreen> {
             icon: const Icon(Icons.check),
             label: const Text('تأكيد الدين'),
             onPressed: () async {
-              if (nameController.text.trim().isNotEmpty) {
-                final debtProvider =
-                    Provider.of<DebtSupplierProvider>(
-                  context,
-                  listen: false,
+              if (nameController.text.trim().isEmpty) return;
+
+              // Captured before the async gap, while both contexts are
+              // still guaranteed valid.
+              final debtProvider = Provider.of<DebtSupplierProvider>(
+                context,
+                listen: false,
+              );
+              final customerName = nameController.text.trim();
+
+              bool success = false;
+              Object? error;
+
+              try {
+                success = await posProvider.completeSaleAsDebt(
+                  customerName,
+                  debtProvider,
                 );
+              } catch (e) {
+                error = e;
+              }
 
-                bool success = false;
-                Object? error;
+              // FIX (use_build_context_synchronously): after the await
+              // above, TWO different BuildContexts are used below - the
+              // dialog's own `ctx` (to pop it) and the screen's `context`
+              // (to show a SnackBar on the screen underneath). Each one
+              // needs its OWN `.mounted` check immediately before use;
+              // checking only `ctx.mounted` does not guarantee `context`
+              // is still safe to use, and vice-versa.
+              if (!ctx.mounted) return;
 
-                try {
-                  success = await posProvider.completeSaleAsDebt(
-                    nameController.text.trim(),
-                    debtProvider,
-                  );
-                } catch (e) {
-                  error = e;
-                }
+              if (success) {
+                Navigator.pop(ctx);
 
-                if (!ctx.mounted) return;
-
-                if (success) {
-                  Navigator.pop(ctx);
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'تم تسجيل الدين بنجاح وتحويل الفاتورة لصفحة الديون',
-                      ),
-                      backgroundColor: Colors.green,
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'تم تسجيل الدين بنجاح وتحويل الفاتورة لصفحة الديون',
                     ),
-                  );
-                } else if (error != null) {
-                  Navigator.pop(ctx);
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } else if (error != null) {
+                Navigator.pop(ctx);
 
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'تم تسجيل الدين، لكن حدث خطأ أثناء تحديث المخزون: $error',
-                      ),
-                      backgroundColor: Colors.orange,
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'تم تسجيل الدين، لكن حدث خطأ أثناء تحديث المخزون: $error',
                     ),
-                  );
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'تعذر إتمام العملية: الكمية المطلوبة لم تعد متوفرة بالكامل في المخزون',
-                      ),
-                      backgroundColor: Colors.red,
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+              } else {
+                // Insufficient stock: keep the dialog open so the user
+                // can adjust the cart, exactly as before - just surface
+                // the message.
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'تعذر إتمام العملية: الكمية المطلوبة لم تعد متوفرة بالكامل في المخزون',
                     ),
-                  );
-                }
+                    backgroundColor: Colors.red,
+                  ),
+                );
               }
             },
           ),
         ],
       ),
-    );
+    ).then((_) => nameController.dispose());
   }
 
   Widget _buildCartHeader() {
@@ -366,38 +401,33 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  // NEW (inventory stock validation): centralizes every place quantity
+  // can change (+ button, - button, manual typing) so all three paths
+  // get the exact same real-time stock check and the exact same
+  // user-facing warning, instead of the increment button silently doing
+  // nothing when stock ran out.
+  void _applyQuantityChange(PosProvider posProvider, int index, int newQty) {
+    final warning = posProvider.updateQuantity(index, newQty);
+    if (warning != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(warning),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   Widget _buildCartItem(
     BuildContext context,
     int index,
-    dynamic item,
-    ProductProvider productProvider,
+    CartItem item,
     PosProvider posProvider,
   ) {
     final double grossTotal = item.sellPrice * item.quantity;
     final double totalDiscountForThisItem = item.lineDiscountTotal;
     final double itemTotal = grossTotal - totalDiscountForThisItem;
-
-    final qtyController = TextEditingController(
-      text: '${item.quantity}',
-    );
-
-    qtyController.selection = TextSelection.fromPosition(
-      TextPosition(
-        offset: qtyController.text.length,
-      ),
-    );
-
-    final discountController = TextEditingController(
-      text: totalDiscountForThisItem > 0
-          ? totalDiscountForThisItem.toStringAsFixed(2)
-          : '',
-    );
-
-    discountController.selection = TextSelection.fromPosition(
-      TextPosition(
-        offset: discountController.text.length,
-      ),
-    );
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -448,9 +478,24 @@ class _PosScreenState extends State<PosScreen> {
 
           SizedBox(
             width: 105,
-            child: TextField(
-              controller: discountController,
-              keyboardType: TextInputType.number,
+            child: TextFormField(
+              key: ValueKey('discount_${item.product.key}'),
+              initialValue: totalDiscountForThisItem > 0
+                  ? totalDiscountForThisItem.toStringAsFixed(2)
+                  : '',
+              // FIX (decimal discount input): the discount is a currency
+              // amount, so it must accept fractional shekel values (e.g.
+              // 5.5, 10.25). `TextInputType.number` alone shows an
+              // integer-only keypad on many devices, and without an
+              // input formatter the field would also happily accept
+              // garbage like "5..5" that `double.tryParse` silently
+              // turns into 0.0 further down. `numberWithOptions(decimal:
+              // true)` gives the user a decimal-point key, and
+              // `_DecimalTextInputFormatter` keeps what they type always
+              // parseable, capped at 2 decimal places to match the
+              // `toStringAsFixed(2)` display everywhere else in the app.
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [_DecimalTextInputFormatter()],
               textAlign: TextAlign.center,
               decoration: InputDecoration(
                 isDense: true,
@@ -467,19 +512,13 @@ class _PosScreenState extends State<PosScreen> {
                 double totalDiscountInput =
                     double.tryParse(val) ?? 0.0;
 
-                final originalProduct =
-                    productProvider.products.firstWhere(
-                  (p) => p.name == item.name,
-                  orElse: () => productProvider.products.first,
-                );
-
                 double discountPerUnit =
                     item.quantity > 0
                         ? (totalDiscountInput / item.quantity)
                         : 0.0;
 
                 if ((item.sellPrice - discountPerUnit) <
-                    originalProduct.costPrice) {
+                    item.product.costPrice) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text(
@@ -511,7 +550,11 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                   onPressed: () {
                     if (item.quantity > 1) {
-                      posProvider.updateQuantity(
+                      // Decreasing can never exceed stock, but we still
+                      // route through the same validated call for
+                      // consistency - it will simply return null here.
+                      _applyQuantityChange(
+                        posProvider,
                         index,
                         item.quantity - 1,
                       );
@@ -520,9 +563,16 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 SizedBox(
                   width: 45,
-                  child: TextField(
-                    controller: qtyController,
+                  child: TextFormField(
+                    key: ValueKey(
+                      'qty_${item.product.key}_${item.quantity}',
+                    ),
+                    initialValue: '${item.quantity}',
                     keyboardType: TextInputType.number,
+                    // Quantity is always a whole number of units - block
+                    // anything but digits at the input level rather than
+                    // relying solely on int.tryParse() after the fact.
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     textAlign: TextAlign.center,
                     decoration: InputDecoration(
                       isDense: true,
@@ -538,10 +588,7 @@ class _PosScreenState extends State<PosScreen> {
                       int? q = int.tryParse(val);
 
                       if (q != null && q > 0) {
-                        posProvider.updateQuantity(
-                          index,
-                          q,
-                        );
+                        _applyQuantityChange(posProvider, index, q);
                       }
                     },
                   ),
@@ -552,7 +599,8 @@ class _PosScreenState extends State<PosScreen> {
                     Icons.add_circle_outline,
                   ),
                   onPressed: () {
-                    posProvider.updateQuantity(
+                    _applyQuantityChange(
+                      posProvider,
                       index,
                       item.quantity + 1,
                     );
@@ -816,7 +864,6 @@ class _PosScreenState extends State<PosScreen> {
                                         context,
                                         index,
                                         item,
-                                        productProvider,
                                         posProvider,
                                       );
                                     },
@@ -990,6 +1037,10 @@ class _PosScreenState extends State<PosScreen> {
                             error = e;
                           }
 
+                          // FIX (use_build_context_synchronously):
+                          // `mounted` (this State's flag) guards every
+                          // use of `context` below, immediately after
+                          // the async gap.
                           if (!mounted) return;
 
                           if (success) {
@@ -1072,4 +1123,3 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 }
-

@@ -19,6 +19,18 @@ class DebtSupplierProvider extends ChangeNotifier {
   /// raw `debts` list.
   List<Debt> get activeDebts => debts.where((d) => !d.isPaid).toList();
 
+  /// Suppliers whose balance is still outstanding. Mirrors [activeDebts]:
+  /// a supplier that has been fully paid is archived (isPaid = true)
+  /// instead of removed from the box, so their record and full payment
+  /// history stay recoverable.
+  List<Supplier> get activeSuppliers =>
+      suppliers.where((s) => !s.isPaid).toList();
+
+  /// Fully-paid, archived supplier accounts. Exposed so the UI can offer
+  /// a "show archived" view instead of that data being invisible forever.
+  List<Supplier> get archivedSuppliers =>
+      suppliers.where((s) => s.isPaid).toList();
+
   DebtSupplierProvider() {
     _init();
   }
@@ -150,8 +162,14 @@ class DebtSupplierProvider extends ChangeNotifier {
     if (_supplierBox != null && _supplierBox!.isOpen) {
       Supplier? existingSupplier;
       try {
+        // Only merge into a supplier account that is still active. A
+        // supplier that was previously paid off in full (now archived
+        // with isPaid = true) gets a fresh record instead of silently
+        // reviving and mutating their old, closed history.
         existingSupplier = _supplierBox!.values.firstWhere(
-          (s) => s.name.trim().toLowerCase() == supplierName.trim().toLowerCase(),
+          (s) =>
+              !s.isPaid &&
+              s.name.trim().toLowerCase() == supplierName.trim().toLowerCase(),
         );
       } catch (_) {
         existingSupplier = null;
@@ -196,10 +214,15 @@ class DebtSupplierProvider extends ChangeNotifier {
 
     if (supplier.remainingAmount <= 0) {
       supplier.remainingAmount = 0; // avoid a meaningless negative balance
-      await supplier.delete();
-    } else {
-      await supplier.save();
+      // CHANGED: previously called `await supplier.delete()` here, which
+      // permanently erased the supplier's name, notes and entire payment
+      // history the instant the balance reached zero. Archive instead,
+      // matching the Debt pattern above - the record stays recoverable
+      // and its history stays intact, it just moves out of the active
+      // suppliers list.
+      supplier.isPaid = true;
     }
+    await supplier.save();
     loadSuppliers();
   }
 }

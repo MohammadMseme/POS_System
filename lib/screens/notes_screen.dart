@@ -33,18 +33,25 @@ class _NotesScreenState extends State<NotesScreen> {
     });
   }
 
-  void _showNoteDialog({
-    Note? existingNote,
-    int? index,
-  }) {
+  // CHANGED: takes the Note object directly instead of a raw list index.
+  // The previous version deleted/edited via `box.deleteAt(index)` /
+  // relying on a manually-recomputed "real index" into a reversed view -
+  // fragile if the box mutated between the grid being built and the tap
+  // landing. Note is already a HiveObject, so operating on it directly
+  // (note.save() / note.delete()) is both simpler and always correct.
+  void _showNoteDialog({Note? existingNote}) {
     final titleController = TextEditingController(
       text: existingNote?.title ?? '',
     );
-
     final contentController = TextEditingController(
       text: existingNote?.content ?? '',
     );
 
+    // FIXED: these controllers were previously never disposed - every
+    // note opened for add/edit leaked a pair of TextEditingControllers.
+    // showDialog's Future completes on any dismissal path (save, cancel,
+    // back button, tapping outside), so disposing afterwards here always
+    // runs exactly once, however the dialog was closed.
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -216,16 +223,18 @@ class _NotesScreenState extends State<NotesScreen> {
                 existingNote.save();
               }
 
-              setState(() {});
               Navigator.pop(ctx);
             },
           ),
         ],
       ),
-    );
+    ).then((_) {
+      titleController.dispose();
+      contentController.dispose();
+    });
   }
 
-  void _deleteNote(int index) {
+  void _deleteNote(Note note) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -262,8 +271,9 @@ class _NotesScreenState extends State<NotesScreen> {
             ),
             icon: const Icon(Icons.delete_outline),
             onPressed: () {
-              _notesBox.deleteAt(index);
-              setState(() {});
+              // CHANGED: delete the HiveObject directly rather than
+              // `box.deleteAt(index)` against a recomputed index.
+              note.delete();
               Navigator.pop(ctx);
             },
             label: const Text('حذف'),
@@ -371,15 +381,9 @@ class _NotesScreenState extends State<NotesScreen> {
                     itemBuilder: (context, index) {
                       final note = notes[index];
 
-                      // لأن العرض معكوس، هذا هو الفهرس الحقيقي
-                      // داخل Hive.
-                      final realIndex =
-                          box.length - 1 - index;
-
                       return InkWell(
                         onTap: () => _showNoteDialog(
                           existingNote: note,
-                          index: realIndex,
                         ),
                         borderRadius:
                             BorderRadius.circular(15),
@@ -466,9 +470,7 @@ class _NotesScreenState extends State<NotesScreen> {
                                       minHeight: 32,
                                     ),
                                     onPressed: () =>
-                                        _deleteNote(
-                                      realIndex,
-                                    ),
+                                        _deleteNote(note),
                                   ),
                                 ],
                               ),
@@ -549,4 +551,3 @@ class _NotesScreenState extends State<NotesScreen> {
     );
   }
 }
-

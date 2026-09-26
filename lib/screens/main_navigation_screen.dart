@@ -4,7 +4,8 @@ import 'products_screen.dart';
 import 'inventory_screen.dart';
 import 'debts_screen.dart';
 import 'suppliers_screen.dart';
-import 'notes_screen.dart'; // 1. استيراد ملف صفحة الملاحظات الجديد
+import 'notes_screen.dart';
+import 'setting_screen.dart'; // NEW: settings tab (change password / lock app)
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -16,14 +17,15 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _selectedIndex = 0;
 
-  // 2. إضافة NotesScreen إلى قائمة الشاشات
+  // NEW: SettingsScreen added as the 7th destination.
   final List<Widget> _screens = const [
     PosScreen(),
     ProductsScreen(),
     InventoryScreen(),
     DebtsScreen(),
     SuppliersScreen(),
-    NotesScreen(), // شاشة الملاحظات الجديدة
+    NotesScreen(),
+    SettingsScreen(),
   ];
 
   @override
@@ -58,6 +60,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           indicatorColor: theme.colorScheme.primary.withValues(alpha: 0.15),
           elevation: 0,
           height: 65,
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.point_of_sale_outlined),
@@ -88,6 +91,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               icon: Icon(Icons.book_outlined),
               selectedIcon: Icon(Icons.book, color: Color(0xFF1565C0)),
               label: 'الملاحظات',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings_outlined),
+              selectedIcon: Icon(Icons.settings, color: Color(0xFF1565C0)),
+              label: 'الإعدادات',
             ),
           ],
         ),

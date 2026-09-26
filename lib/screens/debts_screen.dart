@@ -25,6 +25,11 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final amountController = TextEditingController();
     final itemController = TextEditingController();
 
+    // FIXED: these three controllers were previously created on every
+    // call and never disposed. showDialog's returned Future completes
+    // once the dialog is closed by any means, so disposing in `.then`
+    // guarantees exactly one dispose per dialog, regardless of how it
+    // was dismissed.
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -145,12 +150,17 @@ class _DebtsScreenState extends State<DebtsScreen> {
           ),
         ],
       ),
-    );
+    ).then((_) {
+      nameController.dispose();
+      amountController.dispose();
+      itemController.dispose();
+    });
   }
 
   void _showPaymentDialog(BuildContext context, Debt debt) {
     final payController = TextEditingController();
 
+    // FIXED: previously never disposed. See note in _showAddDebtDialog.
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -271,7 +281,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
           ),
         ],
       ),
-    );
+    ).then((_) => payController.dispose());
   }
 
   Widget _buildSummaryCard({

@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../providers/inventory_provider.dart';
 import '../providers/debt_supplier_provider.dart';
-import '../providers/product_provider.dart'; 
+import '../providers/product_provider.dart';
 import '../models/sale.dart';
 import '../models/product.dart';
 
@@ -19,6 +19,14 @@ class InventoryScreen extends StatefulWidget {
 class _InventoryScreenState extends State<InventoryScreen> {
   String _selectedPeriod = 'يومي';
 
+  static const _periods = [
+    {'value': 'يومي', 'label': 'اليوم', 'icon': Icons.today_outlined},
+    {'value': 'أسبوعي', 'label': 'الأسبوع', 'icon': Icons.view_week_outlined},
+    {'value': 'شهري', 'label': 'الشهر', 'icon': Icons.calendar_view_month_outlined},
+    {'value': 'سنوي', 'label': 'السنة', 'icon': Icons.calendar_today_outlined},
+    {'value': 'الكل', 'label': 'الكل', 'icon': Icons.all_inclusive},
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -27,7 +35,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     });
   }
 
-  // دالة النسخ الاحتياطي الذكي الشامل لكل بيانات البرنامج
+  // دالة النسخ الاحتياطي الذكي الشامل لكل بيانات البرنامج (منطق دون تغيير)
   Future<void> _smartBackupToExternalDrive(BuildContext context) async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
@@ -42,7 +50,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       Directory? externalDrive;
-      for (var letter in ['D','G','H','I','J']) {
+      for (var letter in ['D', 'G', 'H', 'I', 'J']) {
         final dir = Directory('$letter:\\');
         if (dir.existsSync()) {
           externalDrive = dir;
@@ -167,8 +175,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Row(
-          children: const [
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
             Icon(Icons.shopping_cart, color: Colors.orange),
             SizedBox(width: 8),
             Text('تفاصيل المشتريات خلال الفترة'),
@@ -234,8 +243,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Row(
-          children: const [
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
             Icon(Icons.warning_amber_rounded, color: Colors.orange),
             SizedBox(width: 8),
             Text('قائمة نواقص المخزون'),
@@ -289,8 +299,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Row(
-          children: const [
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
             Icon(Icons.account_balance_wallet, color: Colors.purple),
             SizedBox(width: 8),
             Text('جرد ومرابح الديون المعلقة'),
@@ -351,6 +362,65 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Future<void> _confirmDeleteSale(BuildContext context, Sale saleObj) async {
+    bool? confirm = await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('تأكيد الحذف وإرجاع الكميات'),
+        content: const Text('هل أنت متأكد من حذف حركة البيع؟ سيتم إعادة الكميات المباعة تلقائياً إلى المخزون.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('حذف وإرجاع'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+    // FIX (use_build_context_synchronously): guard immediately after the
+    // async gap above, before any further use of `context`.
+    if (!context.mounted) return;
+
+    final productBox = Hive.box<Product>('products');
+
+    // 1. إعادة الكميات المباعة إلى مخزون المنتجات
+    for (var item in saleObj.items) {
+      for (var product in productBox.values) {
+        if (product.name == item.name) {
+          product.stockQuantity += item.quantity;
+          product.save();
+          break;
+        }
+      }
+    }
+
+    // 2. حذف سجل البيع نفسه - يكفي وحده الآن لتحديث كل من صفحتي الجرد
+    // والمنتجات فوراً، لأن InventoryProvider و ProductProvider يستمعان
+    // مباشرة لصناديق Hive المعنية.
+    await saleObj.delete();
+
+    // FIX (use_build_context_synchronously): another async gap
+    // (saleObj.delete()) just happened - re-check before using context.
+    if (!context.mounted) return;
+    Provider.of<ProductProvider>(context, listen: false).refreshProducts();
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('تم حذف حركة البيع وإعادة الكميات إلى المخزون بنجاح'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final inventory = Provider.of<InventoryProvider>(context);
@@ -391,233 +461,368 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
     }
 
+    // الأحدث أولاً
+    individualSaleRows.sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
+
     double realizedProfitFromSales = grossProfit;
 
     return Scaffold(
+      backgroundColor: const Color(0xfff4f7fb),
       appBar: AppBar(
-        title: const Text('الجرد والتقارير المالية'),
+        elevation: 0,
+        backgroundColor: const Color(0xFF1565C0),
+        foregroundColor: Colors.white,
+        titleSpacing: 20,
+        title: const Row(
+          children: [
+            Icon(Icons.analytics_outlined),
+            SizedBox(width: 10),
+            Text('الجرد والتقارير المالية', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.sd_storage),
-            tooltip: 'نسخ احتياطي شامل للهارد الخارجي',
-            onPressed: () => _smartBackupToExternalDrive(context),
+          Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: IconButton(
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.sd_storage_outlined),
+              ),
+              tooltip: 'نسخ احتياطي شامل للهارد الخارجي',
+              onPressed: () => _smartBackupToExternalDrive(context),
+            ),
           ),
         ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          children: [
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'الكل', label: Text('الكل')),
-                ButtonSegment(value: 'يومي', label: Text('يومي')),
-                ButtonSegment(value: 'أسبوعي', label: Text('أسبوعي')),
-                ButtonSegment(value: 'شهري', label: Text('شهري')),
-                ButtonSegment(value: 'سنوي', label: Text('سنوي')),
-              ],
-              selected: {_selectedPeriod},
-              onSelectionChanged: (val) {
-                setState(() {
-                  _selectedPeriod = val.first;
-                });
-              },
-            ),
-            const SizedBox(height: 16),
-
-            Row(
-              children: [
-                _buildStatCard('إجمالي المبيعات', '${totalRevenue.toStringAsFixed(2)} شيكل', Colors.blue),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: InkWell(
-                    onTap: () => _showPurchasesDialog(context, filteredPurchases),
-                    borderRadius: BorderRadius.circular(10),
-                    child: _buildStatCardWidget(
-                      'قيمة المشتريات',
-                      '${totalPurchasesCost.toStringAsFixed(2)} شيكل',
-                      Colors.orange,
-                      hasArrow: true,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _buildStatCard('الربح المحقق من المبيعات', '${realizedProfitFromSales.toStringAsFixed(2)} شيكل', realizedProfitFromSales >= 0 ? Colors.green : Colors.red),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: InkWell(
-                    onTap: () => _showDebtInventoryDialog(context, inventory),
-                    borderRadius: BorderRadius.circular(10),
-                    child: _buildStatCardWidget(
-                      'ديون مستحقة',
-                      '${totalCustomerDebts.toStringAsFixed(2)} شيكل',
-                      Colors.purple,
-                      hasArrow: true,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: InkWell(
-                    onTap: () => _showLowStockDialog(context, inventory.lowStockProducts),
-                    borderRadius: BorderRadius.circular(10),
-                    child: _buildStatCardWidget(
-                      'نواقص المخزون',
-                      '${inventory.lowStockProducts.length} منتجات',
-                      Colors.redAccent,
-                      hasArrow: true,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-
-            const Align(
-              alignment: Alignment.centerRight,
-              child: Text('سجل حركات البيع المفصلة خلال الفترة:', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: SingleChildScrollView(
-                child: SizedBox(
-                  width: double.infinity,
-                  child: DataTable(
-                    columns: const [
-                      DataColumn(label: Text('الوقت')),
-                      DataColumn(label: Text('اسم الصنف')),
-                      DataColumn(label: Text('الكمية')),
-                      DataColumn(label: Text('سعر الجملة')),
-                      DataColumn(label: Text('السعر الأصلي')),
-                      DataColumn(label: Text('الخصم')),
-                      DataColumn(label: Text('سعر البيع الفعلي')),
-                      DataColumn(label: Text('إجمالي الربح')),
-                      DataColumn(label: Text('حذف')),
-                    ],
-                    rows: individualSaleRows.map((row) {
-                      final DateTime date = row['date'];
-                      final timeFormatted = '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-                      final Sale saleObj = row['saleObject'];
-
-                      return DataRow(cells: [
-                        DataCell(Text(timeFormatted)),
-                        DataCell(Text(row['name'])),
-                        DataCell(Text('${row['quantity']}')),
-                        DataCell(Text('${row['costPrice']} شيكل')),
-                        DataCell(Text('${row['sellPrice']} شيكل')),
-                        DataCell(Text('${row['discount']} شيكل', style: const TextStyle(color: Colors.red))),
-                        DataCell(Text('${row['actualSellPrice'].toStringAsFixed(2)} شيكل', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue))),
-                        DataCell(Text('${row['profit'].toStringAsFixed(2)} شيكل', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green))),
-                        DataCell(
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red, size: 20),
-                            tooltip: 'حذف هذه الحركة وإعادة الكميات للمخزون',
-                            onPressed: () async {
-                              // تأكيد الحذف
-                              bool? confirm = await showDialog(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('تأكيد الحذف وإرجاع الكميات'),
-                                  content: const Text('هل أنت متأكد من حذف حركة البيع؟ سيتم إعادة الكميات المباعة تلقائياً إلى المخزون.'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, false),
-                                      child: const Text('إلغاء'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx, true),
-                                      child: const Text('حذف وإرجاع', style: TextStyle(color: Colors.red)),
-                                    ),
-                                  ],
-                                ),
-                              );
-
-                              if (confirm == true) {
-                                final productBox = Hive.box<Product>('products');
-
-                                // 1. إعادة الكميات المباعة إلى مخزون المنتجات
-                                for (var item in saleObj.items) {
-                                  for (var product in productBox.values) {
-                                    if (product.name == item.name) {
-                                      product.stockQuantity += item.quantity;
-                                      product.save();
-                                      break;
-                                    }
-                                  }
-                                }
-
-                                // 2. حذف سجل البيع نفسه
-                                await saleObj.delete(); 
-
-                                // 3. تحديث الواجهة والـ Providers بالكامل
-                                setState(() {});
-                                Provider.of<ProductProvider>(context, listen: false).refreshProducts();
-
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('تم حذف حركة البيع وإعادة الكميات إلى المخزون بنجاح'),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              }
-                            },
-                          ),
-                        ),
-                      ]);
-                    }).toList(),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatCard(String title, String value, Color color) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: TextStyle(color: Colors.grey.shade800, fontSize: 12, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: color)),
+            // ---------- Period selector ----------
+            Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 3)),
+                ],
+              ),
+              child: Row(
+                children: _periods.map((p) {
+                  final selected = _selectedPeriod == p['value'];
+                  return Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _selectedPeriod = p['value'] as String),
+                      borderRadius: BorderRadius.circular(10),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: selected ? const Color(0xFF1565C0) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              p['icon'] as IconData,
+                              size: 18,
+                              color: selected ? Colors.white : Colors.grey.shade500,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              p['label'] as String,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: selected ? Colors.white : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // ---------- Quick stats ----------
+            Row(
+              children: [
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.trending_up_rounded,
+                    title: 'إجمالي المبيعات',
+                    value: '${totalRevenue.toStringAsFixed(2)} ₪',
+                    color: const Color(0xFF1565C0),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.shopping_cart_outlined,
+                    title: 'قيمة المشتريات',
+                    value: '${totalPurchasesCost.toStringAsFixed(2)} ₪',
+                    color: Colors.orange.shade700,
+                    onTap: () => _showPurchasesDialog(context, filteredPurchases),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatCard(
+                    icon: realizedProfitFromSales >= 0 ? Icons.savings_outlined : Icons.trending_down_rounded,
+                    title: 'الربح المحقق',
+                    value: '${realizedProfitFromSales.toStringAsFixed(2)} ₪',
+                    color: realizedProfitFromSales >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.account_balance_wallet_outlined,
+                    title: 'ديون مستحقة',
+                    value: '${totalCustomerDebts.toStringAsFixed(2)} ₪',
+                    color: Colors.purple.shade700,
+                    onTap: () => _showDebtInventoryDialog(context, inventory),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _StatCard(
+                    icon: Icons.warning_amber_rounded,
+                    title: 'نواقص المخزون',
+                    value: '${inventory.lowStockProducts.length} منتج',
+                    color: Colors.red.shade700,
+                    onTap: () => _showLowStockDialog(context, inventory.lowStockProducts),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 18),
+
+            // ---------- Detailed sales table ----------
+            Row(
+              children: [
+                Icon(Icons.receipt_long_outlined, size: 19, color: Colors.grey.shade700),
+                const SizedBox(width: 8),
+                const Text('سجل حركات البيع المفصلة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1565C0).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '${individualSaleRows.length}',
+                    style: const TextStyle(color: Color(0xFF1565C0), fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            Expanded(
+              child: individualSaleRows.isEmpty
+                  ? Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 3)),
+                        ],
+                      ),
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(color: Colors.blue.shade50, shape: BoxShape.circle),
+                              child: Icon(Icons.point_of_sale_outlined, size: 44, color: Colors.blue.shade300),
+                            ),
+                            const SizedBox(height: 14),
+                            const Text('لا توجد حركات بيع خلال هذه الفترة', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 6),
+                            Text('جرّب اختيار فترة زمنية أوسع من الأعلى', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                    )
+                  : Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 3)),
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: SingleChildScrollView(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width - 32),
+                            child: DataTable(
+                              // FIX (deprecated_member_use): MaterialStateProperty
+                              // is deprecated in favor of WidgetStateProperty.
+                              headingRowColor: WidgetStateProperty.all(const Color(0xFF1565C0).withValues(alpha: 0.06)),
+                              headingTextStyle: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D47A1), fontSize: 13),
+                              dataRowColor: WidgetStateProperty.resolveWith((states) => Colors.transparent),
+                              columnSpacing: 22,
+                              horizontalMargin: 16,
+                              columns: const [
+                                DataColumn(label: Text('الوقت')),
+                                DataColumn(label: Text('اسم الصنف')),
+                                DataColumn(label: Text('الكمية')),
+                                DataColumn(label: Text('سعر الجملة')),
+                                DataColumn(label: Text('السعر الأصلي')),
+                                DataColumn(label: Text('الخصم')),
+                                DataColumn(label: Text('سعر البيع الفعلي')),
+                                DataColumn(label: Text('إجمالي الربح')),
+                                DataColumn(label: Text('')),
+                              ],
+                              rows: List<DataRow>.generate(individualSaleRows.length, (i) {
+                                final row = individualSaleRows[i];
+                                final DateTime date = row['date'];
+                                final timeFormatted =
+                                    '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+                                final Sale saleObj = row['saleObject'];
+                                final double profit = row['profit'];
+
+                                return DataRow(
+                                  color: WidgetStateProperty.all(i.isEven ? Colors.white : Colors.grey.shade50),
+                                  cells: [
+                                    DataCell(Text(timeFormatted, style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5))),
+                                    DataCell(Text(row['name'], style: const TextStyle(fontWeight: FontWeight.w600))),
+                                    DataCell(Text('${row['quantity']}')),
+                                    DataCell(Text('${row['costPrice']} ₪')),
+                                    DataCell(Text('${row['sellPrice']} ₪')),
+                                    DataCell(Text(
+                                      '${row['discount']} ₪',
+                                      style: TextStyle(color: (row['discount'] as num) > 0 ? Colors.red.shade600 : Colors.grey.shade400),
+                                    )),
+                                    DataCell(Text(
+                                      '${row['actualSellPrice'].toStringAsFixed(2)} ₪',
+                                      style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1565C0)),
+                                    )),
+                                    DataCell(
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: (profit >= 0 ? Colors.green : Colors.red).withValues(alpha: 0.08),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          '${profit.toStringAsFixed(2)} ₪',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: profit >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    DataCell(
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                                        tooltip: 'حذف هذه الحركة وإعادة الكميات للمخزون',
+                                        onPressed: () => _confirmDeleteSale(context, saleObj),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildStatCardWidget(String title, String value, Color color, {bool hasArrow = false}) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title, style: TextStyle(color: Colors.grey.shade800, fontSize: 11, fontWeight: FontWeight.bold)),
-              if (hasArrow) Icon(Icons.arrow_drop_down_circle, size: 16, color: color),
+/// Compact, tappable quick-stat card used across the top of the Inventory
+/// screen. Purely presentational - all figures are computed in build().
+class _StatCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final Color color;
+  final VoidCallback? onTap;
+
+  const _StatCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.color,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: color.withValues(alpha: 0.15)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8, offset: const Offset(0, 3)),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: color)),
-        ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Icon(icon, color: color, size: 17),
+                  ),
+                  if (onTap != null) Icon(Icons.arrow_drop_down_circle, size: 15, color: color.withValues(alpha: 0.6)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 11.5, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 3),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  value,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

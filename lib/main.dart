@@ -9,14 +9,17 @@ import 'providers/product_provider.dart';
 import 'providers/pos_provider.dart';
 import 'providers/inventory_provider.dart';
 import 'providers/debt_supplier_provider.dart';
+import 'providers/auth_provider.dart';
 
-// 3. استيراد الشاشة الرئيسية
+// 3. استيراد الشاشات
 import 'screens/main_navigation_screen.dart';
+import 'screens/login_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // تهيئة قاعدة البيانات المحلية Hive وفتح جميع الصناديق
+  // تهيئة قاعدة البيانات المحلية Hive وفتح جميع الصناديق (بما فيها صندوق
+  // الإعدادات الجديد الذي يحفظ كلمة المرور)
   await HiveService.init();
 
   runApp(
@@ -26,6 +29,10 @@ void main() async {
         ChangeNotifierProvider(create: (_) => PosProvider()),
         ChangeNotifierProvider(create: (_) => InventoryProvider()),
         ChangeNotifierProvider(create: (_) => DebtSupplierProvider()),
+        // NEW: app-wide password lock. Registered alongside the other
+        // providers so both LoginScreen and SettingsScreen (and, via
+        // AuthGate below, the app's root widget) can read/update it.
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
       ],
       child: const HouseholdStoreApp(),
     ),
@@ -51,7 +58,7 @@ class HouseholdStoreApp extends StatelessWidget {
           surface: Colors.grey.shade50,     // خلفية عامة مريحة للعين
         ),
         fontFamily: 'Segoe UI',
-        
+
         // 1. توحيد شكل شريط العنوان (AppBar) في كافة الواجهات
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFF1565C0),
@@ -102,7 +109,23 @@ class HouseholdStoreApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const MainNavigationScreen(),
+      // CHANGED: the app now boots into AuthGate instead of directly into
+      // MainNavigationScreen, so a password is always required first.
+      home: const AuthGate(),
     );
+  }
+}
+
+/// Decides whether to show the login screen or the main app, based on
+/// [AuthProvider.isAuthenticated]. Every fresh app launch starts locked -
+/// there is no "remember me" bypass, by design, since this guards a
+/// shared point-of-sale device.
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final isAuthenticated = context.watch<AuthProvider>().isAuthenticated;
+    return isAuthenticated ? const MainNavigationScreen() : const LoginScreen();
   }
 }

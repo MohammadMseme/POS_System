@@ -64,11 +64,30 @@ class PosProvider extends ChangeNotifier {
     return null;
   }
 
-  void updateQuantity(int index, int newQty) {
-    if (newQty > 0 && newQty <= cart[index].product.stockQuantity) {
-      cart[index].quantity = newQty;
-      notifyListeners();
+  /// Updates the quantity of the cart line at [index] to [newQty].
+  ///
+  /// FIX (inventory stock validation): previously this silently did
+  /// nothing when [newQty] exceeded the product's current stock - the
+  /// cart just didn't change, with no feedback, so a cashier increasing
+  /// quantity past what's in stock (via the + button or by typing) had
+  /// no idea why nothing happened. This now returns a clear warning
+  /// string describing exactly what's wrong so the screen can surface it
+  /// as a SnackBar; it returns null on success (or on a harmless no-op
+  /// like `newQty <= 0`, which the caller already filters out before
+  /// calling this).
+  String? updateQuantity(int index, int newQty) {
+    if (newQty <= 0) return null;
+
+    final available = cart[index].product.stockQuantity;
+    if (newQty > available) {
+      return available > 0
+          ? 'الكمية المطلوبة ($newQty) غير متوفرة! المتوفر في المخزون: $available فقط.'
+          : 'هذا المنتج غير متوفر حالياً في المخزون.';
     }
+
+    cart[index].quantity = newQty;
+    notifyListeners();
+    return null;
   }
 
   void updateDiscount(int index, double newDiscount) {
