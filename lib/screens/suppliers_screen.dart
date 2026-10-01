@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/debt_supplier_provider.dart';
 import '../models/supplier.dart';
+import '../models/supplier_entry.dart';
 
 class SuppliersScreen extends StatefulWidget {
   const SuppliersScreen({super.key});
@@ -14,8 +15,6 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
-  // Suppliers are archived (not deleted) once fully paid, so we need a
-  // way to see them again instead of them vanishing from the UI.
   bool _showArchived = false;
 
   @override
@@ -35,10 +34,6 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
     super.dispose();
   }
 
-  // NEW: full payment-history detail view. Works for both active and
-  // archived suppliers - tapping an archived (fully-paid) supplier is
-  // now the only way to see their history again, since they no longer
-  // appear in the active list or the summary totals.
   void _showSupplierDetail(BuildContext context, Supplier supplier) {
     showModalBottomSheet(
       context: context,
@@ -82,6 +77,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                   fontWeight: FontWeight.bold,
                   fontSize: 18,
                 ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -235,7 +231,9 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                                 children: [
                                   Container(
                                     padding:
-                                        const EdgeInsets.all(7),
+                                        const EdgeInsets.all(
+                                      7,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: Colors.green.shade50,
                                       borderRadius:
@@ -533,6 +531,7 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                       color: Colors.grey.shade600,
                       fontSize: 12,
                     ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 4),
                   FittedBox(
@@ -577,15 +576,148 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
           children: [
             Icon(icon, size: 16, color: selected ? Colors.white : Colors.grey.shade600),
             const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: selected ? Colors.white : Colors.grey.shade700,
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: selected ? Colors.white : Colors.grey.shade700,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // REDESIGNED: mirrors the Products page - one Row(mainAxisAlignment:
+  // spaceBetween) with an Expanded LEFT identity block (avatar + name +
+  // record count + notes, all ellipsized so nothing can overflow) and a
+  // compact RIGHT-side Column grouping the outstanding amount directly
+  // above its action (پay button, or a chevron once archived).
+  Widget _buildSupplierCard(BuildContext context, Supplier s) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.025),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(15),
+          onTap: () => _showSupplierDetail(context, s),
+          child: Container(
+            padding: const EdgeInsets.all(15),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // ---------- LEFT: identity block ----------
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: s.isPaid ? Colors.green.shade50 : Colors.indigo.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          s.isPaid ? Icons.check_circle_outline : Icons.local_shipping_outlined,
+                          color: s.isPaid ? Colors.green.shade700 : Colors.indigo.shade700,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              s.name,
+                              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              'عدد السجلات: ${s.entries.length}',
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                            ),
+                            if (s.notes.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Text(
+                                  s.notes,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: Colors.blueGrey.shade600, fontSize: 12),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(width: 12),
+
+                // ---------- RIGHT: grouped amount + action ----------
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        s.isPaid ? 'تم السداد بالكامل' : '${s.remainingAmount.toStringAsFixed(2)} شيكل',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: s.isPaid ? Colors.green.shade700 : Colors.red.shade700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (!s.isPaid)
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+                        ),
+                        icon: const Icon(Icons.payment, size: 17),
+                        onPressed: () => _showPaymentDialog(context, s),
+                        label: const Text('دفع دفعة'),
+                      )
+                    else
+                      Icon(Icons.chevron_left, color: Colors.grey.shade400),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -617,13 +749,6 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
 
     final totalSuppliers =
         supplierProvider.activeSuppliers.length;
-
-    final totalPayments =
-        supplierProvider.suppliers.fold<int>(
-      0,
-      (sum, supplier) =>
-          sum + supplier.payments.length,
-    );
 
     return Scaffold(
       backgroundColor: const Color(0xfff7f8fa),
@@ -686,21 +811,11 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                       '${totalRemaining.toStringAsFixed(2)} ₪',
                   color: Colors.red,
                 ),
-                const SizedBox(width: 12),
-                _buildSummaryCard(
-                  icon: Icons.payments_outlined,
-                  title: 'عدد الدفعات',
-                  value: '$totalPayments',
-                  color: Colors.teal,
-                ),
               ],
             ),
 
             const SizedBox(height: 16),
 
-            // Active / Archived segmented toggle. Archived suppliers are
-            // the ones that were paid off in full - tap any card (in
-            // either tab) to open the full payment-history detail sheet.
             Container(
               decoration: BoxDecoration(
                 color: Colors.white,
@@ -790,9 +905,12 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                   children: [
                     Icon(Icons.touch_app_outlined, size: 14, color: Colors.grey.shade500),
                     const SizedBox(width: 4),
-                    Text(
-                      'اضغط على أي بطاقة لعرض كامل سجل الدفعات',
-                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500),
+                    Flexible(
+                      child: Text(
+                        'اضغط على أي بطاقة لعرض كامل سجل الطلبيات والدفعات',
+                        style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
@@ -848,200 +966,8 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
                       itemCount:
                           filteredSuppliers.length,
                       itemBuilder:
-                          (context, index) {
-                        final s =
-                            filteredSuppliers[index];
-
-                        return Container(
-                          margin: const EdgeInsets.only(
-                            bottom: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            borderRadius:
-                                BorderRadius.circular(15),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black
-                                    .withValues(
-                                  alpha: 0.025,
-                                ),
-                                blurRadius: 8,
-                                offset:
-                                    const Offset(0, 3),
-                              ),
-                            ],
-                          ),
-                          child: Material(
-                            color: Colors.white,
-                            borderRadius:
-                                BorderRadius.circular(15),
-                            child: InkWell(
-                              borderRadius:
-                                  BorderRadius.circular(15),
-                              // NEW: tap anywhere on the card to open the
-                              // full payment-history detail sheet.
-                              onTap: () =>
-                                  _showSupplierDetail(context, s),
-                              child: Container(
-                                padding:
-                                    const EdgeInsets.all(15),
-                                decoration: BoxDecoration(
-                                  borderRadius:
-                                      BorderRadius.circular(15),
-                                  border: Border.all(
-                                    color:
-                                        Colors.grey.shade200,
-                                  ),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 52,
-                                      height: 52,
-                                      decoration: BoxDecoration(
-                                        color: s.isPaid
-                                            ? Colors.green.shade50
-                                            : Colors.indigo.shade50,
-                                        borderRadius:
-                                            BorderRadius.circular(
-                                          12,
-                                        ),
-                                      ),
-                                      child: Icon(
-                                        s.isPaid
-                                            ? Icons.check_circle_outline
-                                            : Icons.local_shipping_outlined,
-                                        color: s.isPaid
-                                            ? Colors.green.shade700
-                                            : Colors.indigo.shade700,
-                                        size: 28,
-                                      ),
-                                    ),
-
-                                    const SizedBox(width: 14),
-
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment
-                                                .start,
-                                        children: [
-                                          Text(
-                                            s.name,
-                                            style:
-                                                const TextStyle(
-                                              fontSize: 17,
-                                              fontWeight:
-                                                  FontWeight.bold,
-                                            ),
-                                          ),
-                                          const SizedBox(
-                                              height: 5),
-                                          Text(
-                                            'عدد الدفعات: ${s.payments.length}',
-                                            style: TextStyle(
-                                              color: Colors
-                                                  .grey.shade600,
-                                              fontSize: 13,
-                                            ),
-                                          ),
-                                          if (s.notes.isNotEmpty)
-                                            Padding(
-                                              padding:
-                                                  const EdgeInsets
-                                                      .only(
-                                                top: 3,
-                                              ),
-                                              child: Text(
-                                                s.notes,
-                                                maxLines: 1,
-                                                overflow:
-                                                    TextOverflow
-                                                        .ellipsis,
-                                                style: TextStyle(
-                                                  color: Colors
-                                                      .blueGrey
-                                                      .shade600,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-
-                                    const SizedBox(width: 15),
-
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.end,
-                                      children: [
-                                        Text(
-                                          s.isPaid
-                                              ? 'تم السداد بالكامل'
-                                              : '${s.remainingAmount.toStringAsFixed(2)} شيكل',
-                                          style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight:
-                                                FontWeight.bold,
-                                            color: s.isPaid
-                                                ? Colors.green.shade700
-                                                : Colors.red.shade700,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        if (!s.isPaid)
-                                          ElevatedButton.icon(
-                                            style:
-                                                ElevatedButton
-                                                    .styleFrom(
-                                              backgroundColor:
-                                                  Colors.teal,
-                                              foregroundColor:
-                                                  Colors.white,
-                                              elevation: 0,
-                                              padding:
-                                                  const EdgeInsets
-                                                      .symmetric(
-                                                horizontal: 14,
-                                                vertical: 10,
-                                              ),
-                                              shape:
-                                                  RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius
-                                                        .circular(
-                                                  9,
-                                                ),
-                                              ),
-                                            ),
-                                            icon: const Icon(
-                                              Icons.payment,
-                                              size: 17,
-                                            ),
-                                            onPressed: () =>
-                                                _showPaymentDialog(
-                                              context,
-                                              s,
-                                            ),
-                                            label: const Text(
-                                              'دفع دفعة',
-                                            ),
-                                          )
-                                        else
-                                          Icon(
-                                            Icons.chevron_left,
-                                            color: Colors.grey.shade400,
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
+                          (context, index) =>
+                              _buildSupplierCard(context, filteredSuppliers[index]),
                     ),
             ),
           ],
@@ -1051,10 +977,8 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
   }
 }
 
-/// Full payment-history detail sheet for a single supplier. Opened by
-/// tapping any supplier card - active or archived. Read-only: payments
-/// are still recorded through the existing "دفع دفعة" dialog so this
-/// sheet never has to worry about keeping itself in sync mid-payment.
+/// Full history detail sheet for a single supplier. Unchanged from the
+/// previous version.
 class _SupplierDetailSheet extends StatelessWidget {
   final Supplier supplier;
 
@@ -1088,15 +1012,193 @@ class _SupplierDetailSheet extends StatelessWidget {
     );
   }
 
+  Widget _sectionHeader(IconData icon, String title, Color color, int count) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '$title ($count)',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: color),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _entryTile(SupplierEntry entry) {
+    final dateStr = '${entry.date.year}-'
+        '${entry.date.month.toString().padLeft(2, '0')}-'
+        '${entry.date.day.toString().padLeft(2, '0')}  '
+        '${entry.date.hour.toString().padLeft(2, '0')}:'
+        '${entry.date.minute.toString().padLeft(2, '0')}';
+
+    final bool isOrder = entry.items != null && entry.items!.isNotEmpty;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Theme(
+        data: ThemeData(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          leading: Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: (isOrder ? Colors.indigo : Colors.deepOrange).withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(
+              isOrder ? Icons.playlist_add_check_circle_outlined : Icons.receipt_long_outlined,
+              size: 18,
+              color: isOrder ? Colors.indigo.shade700 : Colors.deepOrange.shade700,
+            ),
+          ),
+          title: Text(
+            entry.title,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(dateStr, style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600)),
+          trailing: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              '+${entry.amount.toStringAsFixed(2)} ₪',
+              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepOrange.shade700, fontSize: 13.5),
+            ),
+          ),
+          children: [
+            if (entry.note.isNotEmpty)
+              Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    entry.note,
+                    style: TextStyle(fontSize: 12.5, color: Colors.grey.shade700),
+                  ),
+                ),
+              ),
+            if (isOrder)
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  headingRowHeight: 34,
+                  dataRowMinHeight: 32,
+                  dataRowMaxHeight: 40,
+                  columnSpacing: 18,
+                  headingTextStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  dataTextStyle: const TextStyle(fontSize: 12),
+                  columns: const [
+                    DataColumn(label: Text('الصنف')),
+                    DataColumn(label: Text('سعر الشراء')),
+                    DataColumn(label: Text('الكمية')),
+                    DataColumn(label: Text('الإجمالي')),
+                  ],
+                  rows: entry.items!
+                      .map(
+                        (item) => DataRow(cells: [
+                          DataCell(Text(item.name)),
+                          DataCell(Text('${item.costPrice.toStringAsFixed(2)} ₪')),
+                          DataCell(Text('${item.quantity}')),
+                          DataCell(Text('${item.total.toStringAsFixed(2)} ₪')),
+                        ]),
+                      )
+                      .toList(),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _paymentTile(SupplierPayment p, int displayIndex) {
+    final dateStr = '${p.date.year}-'
+        '${p.date.month.toString().padLeft(2, '0')}-'
+        '${p.date.day.toString().padLeft(2, '0')}  '
+        '${p.date.hour.toString().padLeft(2, '0')}:'
+        '${p.date.minute.toString().padLeft(2, '0')}';
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              Icons.check_circle_outline,
+              color: Colors.green.shade700,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${p.amountPaid.toStringAsFixed(2)} شيكل',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green.shade700,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  dateStr,
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+                if (p.notes.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      p.notes,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Text(
+            '#$displayIndex',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade400, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final sortedPayments = [...supplier.payments]
-      ..sort((a, b) => b.date.compareTo(a.date));
+    final sortedEntries = [...supplier.entries]..sort((a, b) => b.date.compareTo(a.date));
+    final sortedPayments = [...supplier.payments]..sort((a, b) => b.date.compareTo(a.date));
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.72,
+      initialChildSize: 0.78,
       minChildSize: 0.4,
-      maxChildSize: 0.92,
+      maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) {
         return Container(
@@ -1197,101 +1299,57 @@ class _SupplierDetailSheet extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    Icon(Icons.history, size: 18, color: Colors.grey.shade700),
-                    const SizedBox(width: 6),
-                    Text(
-                      'سجل الدفعات (${sortedPayments.length})',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                  ],
-                ),
-              ),
               const SizedBox(height: 8),
               Expanded(
-                child: sortedPayments.isEmpty
-                    ? Center(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.only(bottom: 24),
+                  children: [
+                    const SizedBox(height: 6),
+                    _sectionHeader(
+                      Icons.playlist_add_check_circle_outlined,
+                      'سجل الطلبيات والإضافات',
+                      Colors.indigo,
+                      sortedEntries.length,
+                    ),
+                    const SizedBox(height: 4),
+                    if (sortedEntries.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                         child: Text(
-                          'لا توجد دفعات مسجلة لهذا المورد',
-                          style: TextStyle(color: Colors.grey.shade500),
+                          'لا توجد طلبيات أو إضافات مسجلة لهذا المورد',
+                          style: TextStyle(color: Colors.grey.shade500, fontSize: 12.5),
                         ),
                       )
-                    : ListView.builder(
-                        controller: scrollController,
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                        itemCount: sortedPayments.length,
-                        itemBuilder: (context, index) {
-                          final p = sortedPayments[index];
-                          final dateStr = '${p.date.year}-'
-                              '${p.date.month.toString().padLeft(2, '0')}-'
-                              '${p.date.day.toString().padLeft(2, '0')}  '
-                              '${p.date.hour.toString().padLeft(2, '0')}:'
-                              '${p.date.minute.toString().padLeft(2, '0')}';
+                    else
+                      ...sortedEntries.map(_entryTile),
 
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade50,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey.shade200),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green.shade50,
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Icon(
-                                    Icons.check_circle_outline,
-                                    color: Colors.green.shade700,
-                                    size: 18,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${p.amountPaid.toStringAsFixed(2)} شيكل',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green.shade700,
-                                          fontSize: 15,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        dateStr,
-                                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                                      ),
-                                      if (p.notes.isNotEmpty)
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 2),
-                                          child: Text(
-                                            p.notes,
-                                            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                Text(
-                                  '#${sortedPayments.length - index}',
-                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade400, fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                    const SizedBox(height: 14),
+                    const Divider(indent: 20, endIndent: 20),
+                    const SizedBox(height: 6),
+
+                    _sectionHeader(
+                      Icons.history,
+                      'سجل الدفعات الصادرة',
+                      Colors.green,
+                      sortedPayments.length,
+                    ),
+                    const SizedBox(height: 4),
+                    if (sortedPayments.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        child: Text(
+                          'لا توجد دفعات مسجلة لهذا المورد',
+                          style: TextStyle(color: Colors.grey.shade500, fontSize: 12.5),
+                        ),
+                      )
+                    else
+                      ...List.generate(
+                        sortedPayments.length,
+                        (index) => _paymentTile(sortedPayments[index], sortedPayments.length - index),
                       ),
+                  ],
+                ),
               ),
             ],
           ),

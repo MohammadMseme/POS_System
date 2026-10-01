@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import 'supplier_entry.dart';
 
 part 'supplier.g.dart';
 
@@ -34,12 +35,24 @@ class Supplier extends HiveObject {
   @HiveField(3)
   double remainingAmount;
 
-  // NEW: mirrors Debt.isPaid. A fully-paid supplier account used to be
+  // Mirrors Debt.isPaid. A fully-paid supplier account used to be
   // deleted outright the moment remainingAmount hit zero, which silently
   // destroyed the supplier's identity and entire payment history. Now it
   // is archived instead - hidden from the active list, but never lost.
   @HiveField(4)
   bool isPaid;
+
+  // NEW: every distinct debt addition (a whole bulk order, or a single
+  // product/manual debt) is recorded here as its own entry, instead of
+  // being flattened into the single free-text `notes` string above.
+  // This is what lets the UI show "طلبية رقم 1", "طلبية رقم 2", etc.,
+  // each independently expandable to its own item table. Appended as a
+  // new Hive field index (5) AFTER all existing ones, so supplier
+  // records written before this change simply lack this key in their
+  // on-disk field map and deserialize safely to an empty list - no
+  // migration step needed, no risk to existing data.
+  @HiveField(5)
+  List<SupplierEntry> entries;
 
   Supplier({
     required this.name,
@@ -47,10 +60,12 @@ class Supplier extends HiveObject {
     List<SupplierPayment>? payments,
     this.remainingAmount = 0.0,
     this.isPaid = false,
-  }) : payments = payments ?? [];
+    List<SupplierEntry>? entries,
+  })  : payments = payments ?? [],
+        entries = entries ?? [];
 
-  // NEW: derived, non-persisted stats for the supplier detail view.
-  // Nothing here is written to Hive - they're computed on read from the
+  // Derived, non-persisted stats for the supplier detail view. Nothing
+  // here is written to Hive - they're computed on read from the
   // `payments` list and current `remainingAmount`, so they stay correct
   // automatically as payments are added, with no extra field to keep in
   // sync.

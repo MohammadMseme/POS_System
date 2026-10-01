@@ -4,8 +4,10 @@ import 'products_screen.dart';
 import 'inventory_screen.dart';
 import 'debts_screen.dart';
 import 'suppliers_screen.dart';
+import 'salaries_expenses_screen.dart'; // رواتب ومفرقات
+import 'calculator_screen.dart'; // NEW: حاسبة
 import 'notes_screen.dart';
-import 'setting_screen.dart'; // NEW: settings tab (change password / lock app)
+import 'setting_screen.dart'; // settings tab (change password / lock app)
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -17,13 +19,15 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _selectedIndex = 0;
 
-  // NEW: SettingsScreen added as the 7th destination.
+  // NEW: CalculatorScreen added right after Salaries/Expenses.
   final List<Widget> _screens = const [
     PosScreen(),
     ProductsScreen(),
     InventoryScreen(),
     DebtsScreen(),
     SuppliersScreen(),
+    SalariesExpensesScreen(),
+    CalculatorScreen(),
     NotesScreen(),
     SettingsScreen(),
   ];
@@ -86,6 +90,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               icon: Icon(Icons.local_shipping_outlined),
               selectedIcon: Icon(Icons.local_shipping, color: Color(0xFF1565C0)),
               label: 'التجار',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.groups_outlined),
+              selectedIcon: Icon(Icons.groups, color: Color(0xFF1565C0)),
+              label: 'رواتب',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.calculate_outlined),
+              selectedIcon: Icon(Icons.calculate, color: Color(0xFF1565C0)),
+              label: 'حاسبة',
             ),
             NavigationDestination(
               icon: Icon(Icons.book_outlined),

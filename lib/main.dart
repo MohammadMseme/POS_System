@@ -10,6 +10,7 @@ import 'providers/pos_provider.dart';
 import 'providers/inventory_provider.dart';
 import 'providers/debt_supplier_provider.dart';
 import 'providers/auth_provider.dart';
+import 'providers/salaries_expenses_provider.dart';
 
 // 3. استيراد الشاشات
 import 'screens/main_navigation_screen.dart';
@@ -18,8 +19,8 @@ import 'screens/login_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // تهيئة قاعدة البيانات المحلية Hive وفتح جميع الصناديق (بما فيها صندوق
-  // الإعدادات الجديد الذي يحفظ كلمة المرور)
+  // تهيئة قاعدة البيانات المحلية Hive وفتح جميع الصناديق (بما فيها صناديق
+  // العمال والمصاريف الجديدة وصندوق الإعدادات الذي يحفظ كلمة المرور)
   await HiveService.init();
 
   runApp(
@@ -33,6 +34,9 @@ void main() async {
         // providers so both LoginScreen and SettingsScreen (and, via
         // AuthGate below, the app's root widget) can read/update it.
         ChangeNotifierProvider(create: (_) => AuthProvider()),
+        // NEW: Salaries & Expenses (رواتب ومفرقات) - workers, their
+        // payments/advances, and general expenses.
+        ChangeNotifierProvider(create: (_) => SalariesExpensesProvider()),
       ],
       child: const HouseholdStoreApp(),
     ),

@@ -7,8 +7,11 @@ import 'package:path_provider/path_provider.dart';
 import '../models/product.dart';
 import '../models/sale.dart';
 import '../models/supplier.dart';
+import '../models/supplier_entry.dart';
 import '../models/debt.dart';
 import '../models/note.dart';
+import '../models/worker.dart';
+import '../models/expense.dart';
 
 class HiveService {
   /// Names of boxes that failed to open normally during this run and had
@@ -33,6 +36,14 @@ class HiveService {
     // enum adapter backing Sale.source (typeId 7 - does not collide with
     // any existing model typeId 0-6).
     if (!Hive.isAdapterRegistered(7)) Hive.registerAdapter(SaleSourceAdapter());
+    // Salaries & Expenses models (typeIds 8-10).
+    if (!Hive.isAdapterRegistered(8)) Hive.registerAdapter(WorkerPaymentAdapter());
+    if (!Hive.isAdapterRegistered(9)) Hive.registerAdapter(WorkerAdapter());
+    if (!Hive.isAdapterRegistered(10)) Hive.registerAdapter(ExpenseAdapter());
+    // NEW: supplier order/history models (typeIds 11-12 - do not
+    // collide with anything above).
+    if (!Hive.isAdapterRegistered(11)) Hive.registerAdapter(SupplierOrderItemAdapter());
+    if (!Hive.isAdapterRegistered(12)) Hive.registerAdapter(SupplierEntryAdapter());
 
     // فتح الصناديق مع المعالجة الآمنة
     await _openBoxSafely<Product>('products');
@@ -40,6 +51,11 @@ class HiveService {
     await _openBoxSafely<Supplier>('suppliers');
     await _openBoxSafely<Debt>('debts');
     await _openBoxSafely<Note>('notes');
+    // Salaries & Expenses boxes. Same crash-safe open path as every
+    // other box, so a corrupted file here is quarantined - never
+    // deleted - exactly like the rest of the app's data.
+    await _openBoxSafely<Worker>('workers');
+    await _openBoxSafely<Expense>('expenses');
 
     // NEW: 'settings' box backs AuthProvider (the app password) and any
     // future local app preferences. It stores plain Strings, so no

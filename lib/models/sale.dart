@@ -28,12 +28,23 @@ class SaleItem {
   @HiveField(4)
   double discountPerUnit;
 
+  // NEW: a SNAPSHOT of the product's category name at the moment this
+  // sale was made - not a live reference to the Product. This is
+  // deliberate: a historical sales record (shown in the Inventory/الجرد
+  // page) must always reflect what was true when the sale happened, even
+  // if the product's category is edited or the product itself is later
+  // deleted. Optional - stays null and is never rendered when the
+  // product had no category set at sale time.
+  @HiveField(5)
+  String? category;
+
   SaleItem({
     required this.name,
     required this.costPrice,
     required this.sellPrice,
     required this.quantity,
     this.discountPerUnit = 0.0,
+    this.category,
   });
 }
 

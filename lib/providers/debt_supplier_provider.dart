@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/debt.dart';
 import '../models/supplier.dart';
+import '../models/supplier_entry.dart';
 import '../models/sale.dart';
 
 class DebtSupplierProvider extends ChangeNotifier {
@@ -118,6 +119,7 @@ class DebtSupplierProvider extends ChangeNotifier {
         sellPrice: item.sellPrice,
         quantity: proportionalQty,
         discountPerUnit: item.discountPerUnit,
+        category: item.category,
       );
     }).where((item) => item.quantity > 0).toList();
 
@@ -158,46 +160,90 @@ class DebtSupplierProvider extends ChangeNotifier {
     loadDebts();
   }
 
-  Future<void> addOrUpdateSupplierDebt(String supplierName, double amount, String note) async {
-    if (_supplierBox != null && _supplierBox!.isOpen) {
-      Supplier? existingSupplier;
-      try {
-        // Only merge into a supplier account that is still active. A
-        // supplier that was previously paid off in full (now archived
-        // with isPaid = true) gets a fresh record instead of silently
-        // reviving and mutating their old, closed history.
-        existingSupplier = _supplierBox!.values.firstWhere(
-          (s) =>
-              !s.isPaid &&
-              s.name.trim().toLowerCase() == supplierName.trim().toLowerCase(),
-        );
-      } catch (_) {
-        existingSupplier = null;
-      }
+  /// Adds a debt to (or updates the debt of) a supplier/merchant, named
+  /// [supplierName]. Only merges into an existing supplier if that
+  /// supplier is still ACTIVE (not fully paid/archived) - a supplier
+  /// previously paid off in full gets a fresh record instead of silently
+  /// reviving and mutating their old, closed history.
+  ///
+  /// [amount] is always added to the supplier's [Supplier.remainingAmount]
+  /// (the cumulative balance shown on their card), regardless of whether
+  /// this call created a new supplier or merged into an existing one.
+  ///
+  /// Every call also appends one distinct, independently-viewable
+  /// [SupplierEntry] to the supplier's history (never overwriting a
+  /// previous one), so a bulk order and a single product addition each
+  /// stay cleanly separated and individually expandable in the UI:
+  /// - If [entryTitle] is given, it's used as-is (e.g. "منتج: اسم المنتج"
+  ///   for a single-product addition from the Products page).
+  /// - Otherwise, when [items] is provided (a bulk order), the entry is
+  ///   auto-titled "طلبية رقم N", where N increments per supplier based
+  ///   on how many order-type entries (entries with a non-null item
+  ///   list) that supplier already has.
+  /// - Otherwise (a plain manual debt with no items), it defaults to
+  ///   "دين إضافي".
+  ///
+  /// [note] is ALSO still appended to the legacy free-text [Supplier.notes]
+  /// field (unchanged behavior), so anything relying on that summary
+  /// keeps working exactly as before.
+  Future<void> addOrUpdateSupplierDebt(
+    String supplierName,
+    double amount,
+    String note, {
+    String? entryTitle,
+    List<SupplierOrderItem>? items,
+  }) async {
+    if (_supplierBox == null || !_supplierBox!.isOpen) return;
 
-      if (existingSupplier != null) {
-        existingSupplier.remainingAmount += amount;
-        if (note.trim().isNotEmpty) {
-          existingSupplier.notes = existingSupplier.notes.isEmpty 
-              ? note 
-              : '${existingSupplier.notes} | $note';
-        }
-        await existingSupplier.save();
-      } else {
-        final newSupplier = Supplier(
-          name: supplierName.trim(),
-          remainingAmount: amount,
-          notes: note.trim(),
-        );
-        await _supplierBox!.add(newSupplier);
-      }
-      loadSuppliers();
+    Supplier? existingSupplier;
+    try {
+      existingSupplier = _supplierBox!.values.firstWhere(
+        (s) =>
+            !s.isPaid &&
+            s.name.trim().toLowerCase() == supplierName.trim().toLowerCase(),
+      );
+    } catch (_) {
+      existingSupplier = null;
     }
+
+    final Supplier target;
+    if (existingSupplier != null) {
+      target = existingSupplier;
+      target.remainingAmount += amount;
+      if (note.trim().isNotEmpty) {
+        target.notes = target.notes.isEmpty
+            ? note
+            : '${target.notes} | $note';
+      }
+    } else {
+      target = Supplier(
+        name: supplierName.trim(),
+        remainingAmount: amount,
+        notes: note.trim(),
+      );
+      await _supplierBox!.add(target);
+    }
+
+    final String resolvedTitle = entryTitle ??
+        (items != null
+            ? 'طلبية رقم ${target.entries.where((e) => e.items != null).length + 1}'
+            : 'دين إضافي');
+
+    target.entries.add(SupplierEntry(
+      title: resolvedTitle,
+      amount: amount,
+      date: DateTime.now(),
+      note: note.trim(),
+      items: items,
+    ));
+
+    await target.save();
+    loadSuppliers();
   }
 
   Future<void> addSupplier(Supplier supplier) async {
     if (_supplierBox != null && _supplierBox!.isOpen) {
-      _supplierBox!.add(supplier);
+      await _supplierBox!.add(supplier);
       loadSuppliers();
     }
   }

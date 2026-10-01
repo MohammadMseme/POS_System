@@ -33,6 +33,14 @@ class CartItem {
 
   double get totalWithDiscount => (sellPrice * quantity) - lineDiscountTotal;
   double get discountPerUnit => quantity > 0 ? (lineDiscountTotal / quantity) : 0.0;
+
+  // NEW (optional product metadata for the cart view): read straight off
+  // the live Product object rather than duplicated here, so the cart
+  // always reflects whatever the product record currently holds. Both
+  // are null/empty when not set on the product, and the UI is
+  // responsible for hiding them in that case.
+  String? get category => product.category;
+  String? get shelfNumber => product.shelfNumber;
 }
 
 class PosProvider extends ChangeNotifier {
@@ -134,6 +142,10 @@ class PosProvider extends ChangeNotifier {
               sellPrice: e.sellPrice,
               quantity: e.quantity,
               discountPerUnit: e.discountPerUnit,
+              // NEW: snapshot the product's category at sale time, so
+              // this historical record (شاشة الجرد) always shows the
+              // category exactly as it was when this sale happened.
+              category: e.product.category,
             ))
         .toList();
 
@@ -194,6 +206,12 @@ class PosProvider extends ChangeNotifier {
               sellPrice: e.sellPrice,
               quantity: e.quantity,
               discountPerUnit: e.discountPerUnit,
+              // NEW: same category snapshot as completeSale() above, so
+              // once this debt is later paid off (see
+              // DebtSupplierProvider.payCustomerDebt) and its items are
+              // turned into a real Sale record, the category still
+              // carries through correctly.
+              category: e.product.category,
             ))
         .toList();
 

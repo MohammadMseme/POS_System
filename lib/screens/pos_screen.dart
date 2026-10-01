@@ -124,6 +124,19 @@ class _PosScreenState extends State<PosScreen> {
             itemBuilder: (context, index) {
               final p = products[index];
 
+              // NEW: build one small "meta" line combining category and
+              // shelf number (whichever are present) so the picker also
+              // helps the cashier tell apart same-named items in
+              // different categories/shelves.
+              final List<String> metaParts = [];
+              if (p.category != null && (p.category as String).trim().isNotEmpty) {
+                metaParts.add('القسم: ${(p.category as String).trim()}');
+              }
+              if (p.shelfNumber != null && (p.shelfNumber as String).trim().isNotEmpty) {
+                metaParts.add('الرف: ${(p.shelfNumber as String).trim()}');
+              }
+              final String metaLine = metaParts.join(' • ');
+
               return Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 elevation: 0,
@@ -143,8 +156,10 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ),
                   subtitle: Text(
-                    'الباركود: ${p.barcode}  •  السعر: ${p.sellPrice} شيكل',
+                    'الباركود: ${p.barcode}  •  السعر: ${p.sellPrice} شيكل'
+                    '${metaLine.isNotEmpty ? '\n$metaLine' : ''}',
                   ),
+                  isThreeLine: metaLine.isNotEmpty,
                   onTap: () {
                     Navigator.pop(ctx);
                     _addToCartAndReset(p, posProvider);
@@ -429,6 +444,13 @@ class _PosScreenState extends State<PosScreen> {
     final double totalDiscountForThisItem = item.lineDiscountTotal;
     final double itemTotal = grossTotal - totalDiscountForThisItem;
 
+    // NEW: category/shelf number, read straight from the cart item's
+    // linked Product. Only rendered at all when at least one of them is
+    // actually set - a product with neither looks exactly as it did
+    // before this feature.
+    final bool hasCategory = item.category != null && item.category!.trim().isNotEmpty;
+    final bool hasShelf = item.shelfNumber != null && item.shelfNumber!.trim().isNotEmpty;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(
@@ -450,6 +472,7 @@ class _PosScreenState extends State<PosScreen> {
         ],
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           SizedBox(
             width: 45,
@@ -638,12 +661,70 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    item.name,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        item.name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      // NEW: category/shelf chips - only shown when at
+                      // least one of them was actually provided for this
+                      // product when it was created/edited.
+                      if (hasCategory || hasShelf) ...[
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            if (hasCategory)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.deepPurple.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.25)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.category_outlined, size: 11, color: Colors.deepPurple),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      item.category!.trim(),
+                                      style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            if (hasShelf)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.brown.withValues(alpha: 0.08),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.brown.withValues(alpha: 0.25)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.shelves, size: 11, color: Colors.brown),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      'الرف: ${item.shelfNumber!.trim()}',
+                                      style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.brown),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],

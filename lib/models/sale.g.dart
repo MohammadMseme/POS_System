@@ -1,4 +1,7 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
+// NOTE: hand-updated to add HiveField(5) category on SaleItem. If you
+// re-run build_runner, it will regenerate an equivalent file from
+// sale.dart.
 
 part of 'sale.dart';
 
@@ -22,13 +25,18 @@ class SaleItemAdapter extends TypeAdapter<SaleItem> {
       sellPrice: fields[2] as double,
       quantity: fields[3] as int,
       discountPerUnit: fields[4] as double,
+      // Sale records written before this field existed simply won't
+      // have key 5 in the map, so they default safely to null (no
+      // category shown for old historical rows - correct, since none
+      // was ever recorded for them).
+      category: fields[5] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, SaleItem obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.name)
       ..writeByte(1)
@@ -38,7 +46,9 @@ class SaleItemAdapter extends TypeAdapter<SaleItem> {
       ..writeByte(3)
       ..write(obj.quantity)
       ..writeByte(4)
-      ..write(obj.discountPerUnit);
+      ..write(obj.discountPerUnit)
+      ..writeByte(5)
+      ..write(obj.category);
   }
 
   @override

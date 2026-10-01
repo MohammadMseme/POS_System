@@ -19,6 +19,11 @@ class InventoryScreen extends StatefulWidget {
 class _InventoryScreenState extends State<InventoryScreen> {
   String _selectedPeriod = 'يومي';
 
+  // NEW (Stagnant items): independent from the sales-period selector
+  // above - this is its own toggle just for the "الأصناف الراكدة" panel.
+  int _stagnationDays = 7;
+  static const List<int> _stagnationOptions = [7, 15, 30, 60];
+
   static const _periods = [
     {'value': 'يومي', 'label': 'اليوم', 'icon': Icons.today_outlined},
     {'value': 'أسبوعي', 'label': 'الأسبوع', 'icon': Icons.view_week_outlined},
@@ -165,6 +170,29 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return product.createdAt.month == now.month && product.createdAt.year == now.year;
       } else {
         return product.createdAt.year == now.year;
+      }
+    }).toList();
+  }
+
+  // NEW: shared period filter for any flattened "row" list that carries
+  // a 'date' key - used for supplier payments, worker payments, and
+  // general expenses alike, following the exact same period definitions
+  // as sales/purchases above.
+  List<Map<String, dynamic>> _filterRowsByPeriod(List<Map<String, dynamic>> rows) {
+    if (_selectedPeriod == 'الكل') {
+      return rows;
+    }
+    final now = DateTime.now();
+    return rows.where((row) {
+      final DateTime date = row['date'] as DateTime;
+      if (_selectedPeriod == 'يومي') {
+        return date.day == now.day && date.month == now.month && date.year == now.year;
+      } else if (_selectedPeriod == 'أسبوعي') {
+        return now.difference(date).inDays <= 7;
+      } else if (_selectedPeriod == 'شهري') {
+        return date.month == now.month && date.year == now.year;
+      } else {
+        return date.year == now.year;
       }
     }).toList();
   }
@@ -362,6 +390,103 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  // NEW (Merchant accounts + Salaries/Expenses <-> Inventory/Jard
+  // integration): a single transparency dialog showing exactly what was
+  // subtracted from "إجمالي المبيعات" and "الربح المحقق" for the
+  // selected period, broken down by source.
+  void _showDeductionsDialog(
+    BuildContext context, {
+    required List<Map<String, dynamic>> supplierPayments,
+    required List<Map<String, dynamic>> workerPayments,
+    required List<Map<String, dynamic>> expenseRows,
+  }) {
+    double supplierTotal = supplierPayments.fold(0.0, (s, r) => s + (r['amountPaid'] as double));
+    double workerTotal = workerPayments.fold(0.0, (s, r) => s + (r['amountPaid'] as double));
+    double expenseTotal = expenseRows.fold(0.0, (s, r) => s + (r['amountPaid'] as double));
+
+    Widget buildSection(String title, List<Map<String, dynamic>> rows, String? nameKey, double total, Color color) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
+              Text('${total.toStringAsFixed(2)} ₪', style: TextStyle(fontWeight: FontWeight.bold, color: color)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (rows.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text('لا يوجد شيء خلال هذه الفترة', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+            )
+          else
+            ...rows.map((row) {
+              final DateTime date = row['date'] as DateTime;
+              final dateStr = '${date.day}/${date.month}/${date.year}';
+              final String? name = nameKey != null ? row[nameKey] as String? : null;
+              final String notes = (row['notes'] as String?) ?? '';
+              final label = [
+                if (name != null && name.isNotEmpty) name,
+                if (notes.isNotEmpty) notes,
+                dateStr,
+              ].join(' - ');
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(label, style: const TextStyle(fontSize: 12))),
+                    Text(
+                      '${(row['amountPaid'] as double).toStringAsFixed(2)} ₪',
+                      style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          const SizedBox(height: 10),
+        ],
+      );
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
+            Icon(Icons.remove_circle_outline, color: Colors.red),
+            SizedBox(width: 8),
+            Expanded(child: Text('تفاصيل الخصومات من المبيعات والربح', style: TextStyle(fontSize: 15))),
+          ],
+        ),
+        content: SizedBox(
+          width: 500,
+          height: 420,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                buildSection('مدفوعات للتجار والموردين (تُخصم من المبيعات فقط)', supplierPayments, 'supplierName', supplierTotal, Colors.teal),
+                const Divider(),
+                buildSection('رواتب وسلف العمال (تُخصم من المبيعات والربح)', workerPayments, 'workerName', workerTotal, Colors.indigo),
+                const Divider(),
+                buildSection('مصاريف عامة (تُخصم من المبيعات والربح)', expenseRows, null, expenseTotal, Colors.red),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _confirmDeleteSale(BuildContext context, Sale saleObj) async {
     bool? confirm = await showDialog(
       context: context,
@@ -385,40 +510,53 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
 
     if (confirm != true) return;
-    // FIX (use_build_context_synchronously): guard immediately after the
-    // async gap above, before any further use of `context`.
     if (!context.mounted) return;
 
     final productBox = Hive.box<Product>('products');
 
-    // 1. إعادة الكميات المباعة إلى مخزون المنتجات
+    final List<String> notRestocked = [];
+
     for (var item in saleObj.items) {
-      for (var product in productBox.values) {
-        if (product.name == item.name) {
-          product.stockQuantity += item.quantity;
-          product.save();
-          break;
-        }
+      Product? matchedProduct;
+      try {
+        matchedProduct = productBox.values.firstWhere((p) => p.name == item.name);
+      } catch (_) {
+        matchedProduct = null;
+      }
+
+      if (matchedProduct != null) {
+        matchedProduct.stockQuantity += item.quantity;
+        await matchedProduct.save();
+      } else {
+        notRestocked.add(item.name);
       }
     }
 
-    // 2. حذف سجل البيع نفسه - يكفي وحده الآن لتحديث كل من صفحتي الجرد
-    // والمنتجات فوراً، لأن InventoryProvider و ProductProvider يستمعان
-    // مباشرة لصناديق Hive المعنية.
     await saleObj.delete();
 
-    // FIX (use_build_context_synchronously): another async gap
-    // (saleObj.delete()) just happened - re-check before using context.
     if (!context.mounted) return;
     Provider.of<ProductProvider>(context, listen: false).refreshProducts();
 
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تم حذف حركة البيع وإعادة الكميات إلى المخزون بنجاح'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    if (notRestocked.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تم حذف حركة البيع وإعادة الكميات إلى المخزون بنجاح'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'تم حذف الحركة، لكن تعذر إيجاد بعض الأصناف لإعادة كميتها للمخزون '
+            '(ربما تم حذفها أو تغيير اسمها): ${notRestocked.join('، ')}',
+          ),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
   }
 
   @override
@@ -431,6 +569,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     final filteredSales = _getFilteredSales(inventory.allSales);
     final filteredPurchases = _getFilteredPurchases(productProvider.products);
+
+    // Money leaving the till within the selected period, from every
+    // source that now feeds into "إجمالي المبيعات" / "الربح المحقق".
+    final filteredSupplierPayments = _filterRowsByPeriod(inventory.allSupplierPaymentRows);
+    final filteredWorkerPayments = _filterRowsByPeriod(inventory.allWorkerPaymentRows);
+    final filteredExpenseRows = _filterRowsByPeriod(inventory.allExpenseRows);
+
+    final double totalSupplierPaymentsInPeriod =
+        filteredSupplierPayments.fold(0.0, (sum, r) => sum + (r['amountPaid'] as double));
+    final double totalWorkerPaymentsInPeriod =
+        filteredWorkerPayments.fold(0.0, (sum, r) => sum + (r['amountPaid'] as double));
+    final double totalExpensesInPeriod =
+        filteredExpenseRows.fold(0.0, (sum, r) => sum + (r['amountPaid'] as double));
+
+    final double totalSalesDeductionsInPeriod =
+        totalSupplierPaymentsInPeriod + totalWorkerPaymentsInPeriod + totalExpensesInPeriod;
+    final double totalProfitDeductionsInPeriod = totalWorkerPaymentsInPeriod + totalExpensesInPeriod;
 
     double totalPurchasesCost = filteredPurchases.fold(0.0, (sum, p) => sum + (p.costPrice * p.stockQuantity));
 
@@ -451,6 +606,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
           'saleObject': sale,
           'date': sale.createdAt,
           'name': item.name,
+          // NEW: category snapshotted on the SaleItem at sale time, so
+          // this row always shows the category as it was then - never
+          // displayed at all when the item had no category set.
+          'category': item.category,
           'quantity': item.quantity,
           'costPrice': item.costPrice,
           'sellPrice': item.sellPrice,
@@ -464,7 +623,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
     // الأحدث أولاً
     individualSaleRows.sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
 
-    double realizedProfitFromSales = grossProfit;
+    // CHANGED (Merchant accounts + Salaries/Expenses <-> Inventory/Jard
+    // integration): every merchant payment, worker payment/advance, and
+    // general expense within the selected period is money leaving the
+    // till, so both figures below are shown net of them. Profit is NOT
+    // reduced by supplier payments (see totalProfitDeductionsInPeriod).
+    final double netRevenue = totalRevenue - totalSalesDeductionsInPeriod;
+    final double netProfit = grossProfit - totalProfitDeductionsInPeriod;
+
+    final stagnantProducts = inventory.getStagnantProducts(_stagnationDays);
 
     return Scaffold(
       backgroundColor: const Color(0xfff4f7fb),
@@ -562,8 +729,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   child: _StatCard(
                     icon: Icons.trending_up_rounded,
                     title: 'إجمالي المبيعات',
-                    value: '${totalRevenue.toStringAsFixed(2)} ₪',
+                    value: '${netRevenue.toStringAsFixed(2)} ₪',
                     color: const Color(0xFF1565C0),
+                    subtitle: totalSalesDeductionsInPeriod > 0
+                        ? '(بعد خصم ${totalSalesDeductionsInPeriod.toStringAsFixed(2)} ₪)'
+                        : null,
+                    onTap: (filteredSupplierPayments.isNotEmpty ||
+                            filteredWorkerPayments.isNotEmpty ||
+                            filteredExpenseRows.isNotEmpty)
+                        ? () => _showDeductionsDialog(
+                              context,
+                              supplierPayments: filteredSupplierPayments,
+                              workerPayments: filteredWorkerPayments,
+                              expenseRows: filteredExpenseRows,
+                            )
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -579,10 +759,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _StatCard(
-                    icon: realizedProfitFromSales >= 0 ? Icons.savings_outlined : Icons.trending_down_rounded,
+                    icon: netProfit >= 0 ? Icons.savings_outlined : Icons.trending_down_rounded,
                     title: 'الربح المحقق',
-                    value: '${realizedProfitFromSales.toStringAsFixed(2)} ₪',
-                    color: realizedProfitFromSales >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+                    value: '${netProfit.toStringAsFixed(2)} ₪',
+                    color: netProfit >= 0 ? Colors.green.shade700 : Colors.red.shade700,
+                    subtitle: totalProfitDeductionsInPeriod > 0
+                        ? '(بعد خصم ${totalProfitDeductionsInPeriod.toStringAsFixed(2)} ₪ رواتب/مصاريف)'
+                        : null,
+                    onTap: (filteredWorkerPayments.isNotEmpty || filteredExpenseRows.isNotEmpty)
+                        ? () => _showDeductionsDialog(
+                              context,
+                              supplierPayments: filteredSupplierPayments,
+                              workerPayments: filteredWorkerPayments,
+                              expenseRows: filteredExpenseRows,
+                            )
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -608,7 +799,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ],
             ),
 
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
+
+            // ---------- Stagnant items panel ----------
+            _StagnantItemsSection(
+              stagnantProducts: stagnantProducts,
+              selectedDays: _stagnationDays,
+              options: _stagnationOptions,
+              onDaysChanged: (d) => setState(() => _stagnationDays = d),
+            ),
+
+            const SizedBox(height: 16),
 
             // ---------- Detailed sales table ----------
             Row(
@@ -674,8 +875,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           child: ConstrainedBox(
                             constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width - 32),
                             child: DataTable(
-                              // FIX (deprecated_member_use): MaterialStateProperty
-                              // is deprecated in favor of WidgetStateProperty.
                               headingRowColor: WidgetStateProperty.all(const Color(0xFF1565C0).withValues(alpha: 0.06)),
                               headingTextStyle: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D47A1), fontSize: 13),
                               dataRowColor: WidgetStateProperty.resolveWith((states) => Colors.transparent),
@@ -685,11 +884,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 DataColumn(label: Text('الوقت')),
                                 DataColumn(label: Text('اسم الصنف')),
                                 DataColumn(label: Text('الكمية')),
-                                DataColumn(label: Text('سعر الجملة')),
-                                DataColumn(label: Text('السعر الأصلي')),
-                                DataColumn(label: Text('الخصم')),
-                                DataColumn(label: Text('سعر البيع الفعلي')),
-                                DataColumn(label: Text('إجمالي الربح')),
+                                DataColumn(label: Text('سعر الجملة للحبة')),
+                                DataColumn(label: Text('السعر الأصلي للحبة')),
+                                DataColumn(label: Text('الخصم للحبة')),
+                                DataColumn(label: Text('سعر البيع الفعلي للحبة')),
+                                DataColumn(label: Text('إجمالي الربح للكل')),
                                 DataColumn(label: Text('')),
                               ],
                               rows: List<DataRow>.generate(individualSaleRows.length, (i) {
@@ -699,12 +898,50 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                     '${date.day}/${date.month}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
                                 final Sale saleObj = row['saleObject'];
                                 final double profit = row['profit'];
+                                final String? category = row['category'] as String?;
+                                final bool hasCategory = category != null && category.trim().isNotEmpty;
 
                                 return DataRow(
                                   color: WidgetStateProperty.all(i.isEven ? Colors.white : Colors.grey.shade50),
                                   cells: [
                                     DataCell(Text(timeFormatted, style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5))),
-                                    DataCell(Text(row['name'], style: const TextStyle(fontWeight: FontWeight.w600))),
+                                    // NEW: product name + category badge
+                                    // right next to it, shown ONLY when
+                                    // the sale item actually carries a
+                                    // (snapshotted) category.
+                                    DataCell(
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              row['name'],
+                                              style: const TextStyle(fontWeight: FontWeight.w600),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (hasCategory) ...[
+                                            const SizedBox(width: 6),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.deepPurple.withValues(alpha: 0.08),
+                                                borderRadius: BorderRadius.circular(20),
+                                                border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.25)),
+                                              ),
+                                              child: Text(
+                                                category.trim(),
+                                                style: const TextStyle(
+                                                  fontSize: 10.5,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.deepPurple,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
                                     DataCell(Text('${row['quantity']}')),
                                     DataCell(Text('${row['costPrice']} ₪')),
                                     DataCell(Text('${row['sellPrice']} ₪')),
@@ -763,6 +1000,7 @@ class _StatCard extends StatelessWidget {
   final String value;
   final Color color;
   final VoidCallback? onTap;
+  final String? subtitle;
 
   const _StatCard({
     required this.icon,
@@ -770,6 +1008,7 @@ class _StatCard extends StatelessWidget {
     required this.value,
     required this.color,
     this.onTap,
+    this.subtitle,
   });
 
   @override
@@ -820,9 +1059,147 @@ class _StatCard extends StatelessWidget {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color),
                 ),
               ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  subtitle!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 9.5, color: Colors.red.shade400, fontWeight: FontWeight.w600),
+                ),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// "الأصناف الراكدة" panel. Shows the count and names of products with
+/// zero sales within the selected stagnation window, with a dynamic
+/// 7/15/30/60-day toggle.
+class _StagnantItemsSection extends StatelessWidget {
+  final List<Product> stagnantProducts;
+  final int selectedDays;
+  final List<int> options;
+  final ValueChanged<int> onDaysChanged;
+
+  const _StagnantItemsSection({
+    required this.stagnantProducts,
+    required this.selectedDays,
+    required this.options,
+    required this.onDaysChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.deepPurple.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.hourglass_bottom_outlined, color: Colors.deepPurple, size: 19),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text('الأصناف الراكدة', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.deepPurple.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${stagnantProducts.length}',
+                      style: const TextStyle(color: Colors.deepPurple, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: options.map((d) {
+                  final selected = d == selectedDays;
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: InkWell(
+                      onTap: () => onDaysChanged(d),
+                      borderRadius: BorderRadius.circular(20),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selected ? Colors.deepPurple : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '$d يوم',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.bold,
+                            color: selected ? Colors.white : Colors.grey.shade700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (stagnantProducts.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                'لا توجد أصناف راكدة خلال آخر $selectedDays يوم 🎉',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5),
+              ),
+            )
+          else
+            SizedBox(
+              height: 130,
+              child: ListView.separated(
+                itemCount: stagnantProducts.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final p = stagnantProducts[index];
+                  return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.circle, size: 8, color: Colors.deepPurple.shade300),
+                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    subtitle: Text(
+                      'الكمية المتوفرة: ${p.stockQuantity}',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
       ),
     );
   }

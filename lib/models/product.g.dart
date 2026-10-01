@@ -1,4 +1,7 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
+// NOTE: hand-updated to add HiveField(6) category and HiveField(7)
+// shelfNumber. If you re-run build_runner, it will regenerate an
+// equivalent file from product.dart.
 
 part of 'product.dart';
 
@@ -23,13 +26,18 @@ class ProductAdapter extends TypeAdapter<Product> {
       sellPrice: fields[3] as double,
       stockQuantity: fields[4] as int,
       createdAt: fields[5] as DateTime?,
+      // Records written before this field existed simply won't have
+      // keys 6/7 in the map, so they default safely to null (which
+      // means "not set" everywhere in the UI).
+      category: fields[6] as String?,
+      shelfNumber: fields[7] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Product obj) {
     writer
-      ..writeByte(6)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.barcode)
       ..writeByte(1)
@@ -41,7 +49,11 @@ class ProductAdapter extends TypeAdapter<Product> {
       ..writeByte(4)
       ..write(obj.stockQuantity)
       ..writeByte(5)
-      ..write(obj.createdAt);
+      ..write(obj.createdAt)
+      ..writeByte(6)
+      ..write(obj.category)
+      ..writeByte(7)
+      ..write(obj.shelfNumber);
   }
 
   @override

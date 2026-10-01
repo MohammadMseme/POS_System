@@ -1,6 +1,7 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
-// NOTE: hand-updated to add HiveField(4) isPaid. If you re-run
-// build_runner, it will regenerate an equivalent file from supplier.dart.
+// NOTE: hand-updated to add HiveField(4) isPaid and HiveField(5)
+// entries. If you re-run build_runner, it will regenerate an equivalent
+// file from supplier.dart.
 
 part of 'supplier.dart';
 
@@ -66,13 +67,16 @@ class SupplierAdapter extends TypeAdapter<Supplier> {
       // Records written before this field existed simply won't have key
       // 4 in the map, so they default safely to "not archived".
       isPaid: fields[4] as bool? ?? false,
+      // Records written before this feature existed simply won't have
+      // key 5 in the map, so they default safely to an empty list.
+      entries: (fields[5] as List?)?.cast<SupplierEntry>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, Supplier obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.name)
       ..writeByte(1)
@@ -82,7 +86,9 @@ class SupplierAdapter extends TypeAdapter<Supplier> {
       ..writeByte(3)
       ..write(obj.remainingAmount)
       ..writeByte(4)
-      ..write(obj.isPaid);
+      ..write(obj.isPaid)
+      ..writeByte(5)
+      ..write(obj.entries);
   }
 
   @override
