@@ -206,11 +206,11 @@ class PosProvider extends ChangeNotifier {
               sellPrice: e.sellPrice,
               quantity: e.quantity,
               discountPerUnit: e.discountPerUnit,
-              // NEW: same category snapshot as completeSale() above, so
-              // once this debt is later paid off (see
+              // Same category snapshot as completeSale() above, so once
+              // this debt is FULLY paid (see
               // DebtSupplierProvider.payCustomerDebt) and its items are
-              // turned into a real Sale record, the category still
-              // carries through correctly.
+              // written into the sales records, the category carries
+              // through correctly.
               category: e.product.category,
             ))
         .toList();
@@ -227,6 +227,10 @@ class PosProvider extends ChangeNotifier {
       createdAt: DateTime.now(),
       saleItems: saleItems,
       totalProfit: totalProfit,
+      // Credit sale: nothing is counted in sales/profit yet. Payments
+      // recover this capital first, then count as profit.
+      recoveredCapital: 0.0,
+      realizedProfit: 0.0,
     );
 
     // ATOMICITY FIX: persist the Debt record FIRST, same reasoning as

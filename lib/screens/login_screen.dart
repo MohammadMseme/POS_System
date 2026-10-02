@@ -18,6 +18,20 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isChecking = false;
   String? _errorText;
 
+  // NEW: which role is logging in. Defaults to the restricted Employee
+  // role, so the full Admin view is only opened deliberately.
+  UserRole _role = UserRole.employee;
+
+  void _selectRole(UserRole role) {
+    if (_isChecking || role == _role) return;
+    setState(() {
+      _role = role;
+      _errorText = null;
+      _passwordController.clear();
+    });
+    _focusNode.requestFocus();
+  }
+
   @override
   void dispose() {
     _passwordController.dispose();
@@ -43,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
 
     final auth = Provider.of<AuthProvider>(context, listen: false);
-    final success = auth.login(_passwordController.text);
+    final success = auth.login(_role, _passwordController.text);
 
     if (!mounted) return;
 
@@ -148,7 +162,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'الرجاء إدخال كلمة المرور للدخول',
+                        'اختر نوع الحساب ثم أدخل كلمة المرور',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.75),
                           fontSize: 13.5,
@@ -174,6 +188,31 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              // NEW: role selection (Admin / Employee).
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _RoleOption(
+                                      icon: Icons.badge_outlined,
+                                      title: 'موظف',
+                                      subtitle: 'نقطة البيع والتحصيل',
+                                      selected: _role == UserRole.employee,
+                                      onTap: () => _selectRole(UserRole.employee),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: _RoleOption(
+                                      icon: Icons.admin_panel_settings_outlined,
+                                      title: 'مدير',
+                                      subtitle: 'صلاحيات كاملة',
+                                      selected: _role == UserRole.admin,
+                                      onTap: () => _selectRole(UserRole.admin),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
                               TextFormField(
                                 controller: _passwordController,
                                 focusNode: _focusNode,
@@ -186,7 +225,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   letterSpacing: 4,
                                 ),
                                 decoration: InputDecoration(
-                                  labelText: 'كلمة المرور',
+                                  labelText: 'كلمة مرور ${_role.label}',
                                   errorText: _errorText,
                                   prefixIcon: const Icon(Icons.lock_outline),
                                   suffixIcon: IconButton(
@@ -234,8 +273,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                             strokeWidth: 2.5,
                                           ),
                                         )
-                                      : const Text(
-                                          'دخول',
+                                      : Text(
+                                          'دخول ك${_role.label}',
                                           style: TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.bold,
@@ -254,6 +293,68 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// One selectable role card on the login screen.
+class _RoleOption extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _RoleOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const Color accent = Color(0xFF1565C0);
+    return Material(
+      color: selected ? accent.withValues(alpha: 0.08) : Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? accent : Colors.grey.shade300,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: selected ? accent : Colors.grey.shade600, size: 28),
+              const SizedBox(height: 6),
+              Text(
+                title,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  color: selected ? accent : Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

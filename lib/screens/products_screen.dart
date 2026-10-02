@@ -4,6 +4,7 @@ import '../providers/product_provider.dart';
 import '../providers/debt_supplier_provider.dart';
 import '../models/product.dart';
 import '../services/Barcode_print_service.dart';
+import '../widgets/wholesale_price_reveal.dart';
 import 'bulk_order_screen.dart';
 
 class ProductsScreen extends StatefulWidget {
@@ -14,11 +15,12 @@ class ProductsScreen extends StatefulWidget {
 }
 
 class _ProductsScreenState extends State<ProductsScreen> {
-  final _formKey = GlobalKey<FormState>();
   final _barcodeController = TextEditingController();
   final _nameController = TextEditingController();
   final _costPriceController = TextEditingController();
   final _sellPriceController = TextEditingController();
+  // NEW: optional wholesale reference price (سعر الجملة).
+  final _wholesalePriceController = TextEditingController();
   final _stockController = TextEditingController();
   final _searchController = TextEditingController();
   final _categoryController = TextEditingController();
@@ -33,6 +35,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     _nameController.dispose();
     _costPriceController.dispose();
     _sellPriceController.dispose();
+    _wholesalePriceController.dispose();
     _stockController.dispose();
     _searchController.dispose();
     _categoryController.dispose();
@@ -43,12 +46,21 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   void _showAddOrEditProductDialog({Product? product}) {
     final String? oldBarcode = product?.barcode;
+    // FIXED (lifecycle): a fresh form key per dialog. A single screen-level
+    // GlobalKey crashed with "Duplicate GlobalKey" if the dialog was
+    // reopened while the previous one was still animating closed.
+    final formKey = GlobalKey<FormState>();
+    // Guards against a double tap on save: the edit path awaits before
+    // popping, and a second pop() would close the screen under the dialog.
+    bool saving = false;
 
     if (product != null) {
       _barcodeController.text = product.barcode;
       _nameController.text = product.name;
       _costPriceController.text = product.costPrice.toString();
       _sellPriceController.text = product.sellPrice.toString();
+      _wholesalePriceController.text =
+          product.hasWholesalePrice ? product.wholesalePrice.toString() : '';
       _stockController.text = product.stockQuantity.toString();
       _categoryController.text = product.category ?? '';
       _shelfController.text = product.shelfNumber ?? '';
@@ -57,6 +69,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
       _nameController.clear();
       _costPriceController.clear();
       _sellPriceController.clear();
+      _wholesalePriceController.clear();
       _stockController.clear();
       _categoryController.clear();
       _shelfController.clear();
@@ -99,7 +112,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
           width: 500,
           child: SingleChildScrollView(
             child: Form(
-              key: _formKey,
+              key: formKey,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -159,6 +172,31 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         double.tryParse(v ?? '') == null
                             ? 'أدخل رقم صحيح'
                             : null,
+                  ),
+                  const SizedBox(height: 12),
+                  // NEW: optional wholesale price - reference only.
+                  TextFormField(
+                    controller: _wholesalePriceController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: 'سعر الجملة (اختياري)',
+                      helperText:
+                          'للمرجع فقط - لا يدخل في أي حسابات، ويظهر عند الضغط على سعر البيع',
+                      helperMaxLines: 2,
+                      prefixIcon: const Icon(Icons.local_offer_outlined),
+                      suffixText: 'شيكل',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    validator: (v) {
+                      final text = (v ?? '').trim();
+                      if (text.isEmpty) return null;
+                      final value = double.tryParse(text);
+                      if (value == null || value < 0) return 'أدخل رقم صحيح';
+                      return null;
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -279,7 +317,12 @@ class _ProductsScreenState extends State<ProductsScreen> {
               ),
             ),
             onPressed: () async {
-              if (_formKey.currentState!.validate()) {
+              if (saving) return;
+              if (formKey.currentState!.validate()) {
+                saving = true;
+                // Captured now; checked after the await below so we only
+                // ever pop THIS dialog, never the screen underneath it.
+                final dialogRoute = ModalRoute.of(dialogContext);
                 final provider =
                     Provider.of<ProductProvider>(context, listen: false);
 
@@ -291,6 +334,12 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     _shelfController.text.trim().isEmpty
                         ? null
                         : _shelfController.text.trim();
+                final double? parsedWholesale =
+                    double.tryParse(_wholesalePriceController.text.trim());
+                final double? wholesaleValue =
+                    (parsedWholesale != null && parsedWholesale > 0)
+                        ? parsedWholesale
+                        : null;
 
                 if (product == null) {
                   final newProduct = Product(
@@ -308,6 +357,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         int.parse(_stockController.text),
                     category: categoryValue,
                     shelfNumber: shelfValue,
+                    wholesalePrice: wholesaleValue,
                   );
 
                   String result =
@@ -391,10 +441,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     stockQuantity: int.parse(_stockController.text),
                     category: categoryValue,
                     shelfNumber: shelfValue,
+                    wholesalePrice: wholesaleValue,
                   );
 
                   if (!dialogContext.mounted) return;
-                  Navigator.pop(dialogContext);
+                  if (dialogRoute != null && dialogRoute.isCurrent) {
+                    Navigator.pop(dialogContext);
+                  }
 
                   if (!context.mounted) return;
                   if (result == 'rejected_barcode_conflict') {
@@ -783,9 +836,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
                               style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
                             ),
                             const SizedBox(height: 2),
-                            Text(
-                              '${product.sellPrice.toStringAsFixed(2)} ₪',
-                              style: const TextStyle(
+                            // NEW: tap the selling price to reveal the
+                            // optional wholesale price (reference only).
+                            WholesalePriceReveal(
+                              priceText:
+                                  '${product.sellPrice.toStringAsFixed(2)} ₪',
+                              wholesalePrice: product.wholesalePrice,
+                              priceStyle: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.green,
                                 fontSize: 14,

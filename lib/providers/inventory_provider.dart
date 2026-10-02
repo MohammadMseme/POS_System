@@ -83,6 +83,15 @@ class InventoryProvider extends ChangeNotifier {
         }
       }
     }
+    // Items sold on credit leave the shelf immediately even though they
+    // only enter the sales records once the debt is fully paid - so they
+    // must not be reported as stagnant meanwhile.
+    for (final debt in _debtBox.values) {
+      if (debt.isPaid) continue;
+      for (final item in debt.saleItems) {
+        soldNamesInPeriod.add(item.name);
+      }
+    }
 
     return _productsBox.values.where((p) {
       if (p.createdAt.isAfter(cutoff)) return false; // too new to judge
@@ -183,37 +192,194 @@ class InventoryProvider extends ChangeNotifier {
         .fold(0.0, (sum, debt) => sum + debt.remainingAmount);
   }
 
-  // صفوف الأصناف المعلقة في الديون الحالية (مع حساب السعر الفعلي بعد الخصم)
+  /// Open (unpaid) debts, newest first - used by the "ديون مستحقة"
+  /// details dialog to show items + capital recovery status per debt.
+  List<Debt> get openDebts {
+    final list = _debtBox.values.where((d) => !d.isPaid).toList();
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  // صفوف الأصناف المعلقة في الديون الحالية.
+  // CHANGED: credit-sale items now stay entirely "pending" until the
+  // whole debt is paid (they are no longer released proportionally), so
+  // the full quantities are listed, together with the debt's capital
+  // recovery status.
   List<Map<String, dynamic>> get pendingDebtInventoryRows {
-    List<Map<String, dynamic>> rows = [];
-    for (var debt in _debtBox.values) {
-      if (debt.isPaid) continue;
-
-      double ratio = debt.totalAmount > 0 ? (debt.remainingAmount / debt.totalAmount) : 0.0;
-      for (var item in debt.saleItems) {
-        int remainingQty = (item.quantity * ratio).round();
-        if (remainingQty > 0 || debt.saleItems.length == 1) {
-          int finalQty = remainingQty > 0 ? remainingQty : item.quantity;
-
-          double actualUnitPrice = item.sellPrice - item.discountPerUnit;
-          double totalActualPrice = actualUnitPrice * finalQty;
-
-          rows.add({
-            'customerName': debt.customerName,
-            'name': item.name,
-            'quantity': finalQty,
-            'actualPrice': totalActualPrice,
-          });
-        }
+    final List<Map<String, dynamic>> rows = [];
+    for (final debt in openDebts) {
+      for (final item in debt.saleItems) {
+        final double actualUnitPrice = item.sellPrice - item.discountPerUnit;
+        rows.add({
+          'debt': debt,
+          'customerName': debt.customerName,
+          'name': item.name,
+          'category': item.category,
+          'quantity': item.quantity,
+          'actualPrice': actualUnitPrice * item.quantity,
+          'capitalRecovered': debt.isCapitalRecovered,
+        });
       }
     }
     return rows;
   }
 
-  // إجمالي الأرباح المتوقعة من الديون المعلقة (غير المسددة فقط)
+  // الأرباح المتبقية المتوقعة من الديون المعلقة: الجزء من الربح الذي لم
+  // يُحتسب بعد في صافي الربح (لأنه يُحتسب فقط بعد استرداد رأس المال).
   double get totalExpectedDebtProfit {
     return _debtBox.values
         .where((d) => !d.isPaid)
-        .fold(0.0, (sum, debt) => sum + debt.totalProfit);
+        .fold(0.0, (sum, debt) => sum + debt.pendingProfit);
   }
+
+  /// Cost price (رأس المال) still locked inside unpaid debts.
+  double get totalPendingDebtCapital {
+    return _debtBox.values
+        .where((d) => !d.isPaid)
+        .fold(0.0, (sum, debt) => sum + debt.capitalRemaining);
+  }
+
+  // ---------------------------------------------------------------------
+  // NEW: Best-selling items (الأصناف الأكثر مبيعاً)
+  // ---------------------------------------------------------------------
+
+  /// Top-selling items within [period], ranked by quantity sold. Based on
+  /// the sales records, i.e. cash sales plus credit sales that were fully
+  /// paid (exactly what the sales records page shows). Category and shelf
+  /// come from the live product when it still exists, falling back to the
+  /// category snapshotted on the sale.
+  List<BestSellingEntry> getBestSellingItems(BestSellingPeriod period, {int limit = 10}) {
+    final now = DateTime.now();
+    bool inPeriod(DateTime d) => switch (period) {
+          BestSellingPeriod.day =>
+            d.year == now.year && d.month == now.month && d.day == now.day,
+          BestSellingPeriod.week => !d.isAfter(now) && now.difference(d).inDays < 7,
+          BestSellingPeriod.month => d.year == now.year && d.month == now.month,
+        };
+
+    final Map<String, _BestSellingAccumulator> byName = {};
+    for (final sale in _salesBox.values) {
+      if (sale.items.isEmpty || !inPeriod(sale.createdAt)) continue;
+      for (final item in sale.items) {
+        final key = item.name.trim();
+        if (key.isEmpty) continue;
+        final acc = byName.putIfAbsent(key, () => _BestSellingAccumulator(key));
+        acc.quantity += item.quantity;
+        acc.revenue += (item.sellPrice - item.discountPerUnit) * item.quantity;
+        if (item.category != null && item.category!.trim().isNotEmpty) {
+          acc.snapshotCategory ??= item.category!.trim();
+        }
+      }
+    }
+
+    final products = productsByName;
+    final entries = byName.values.map((acc) {
+      final product = products[acc.name.toLowerCase()];
+      final String? liveCategory =
+          (product?.category != null && product!.category!.trim().isNotEmpty)
+              ? product.category!.trim()
+              : null;
+      final String? shelf =
+          (product?.shelfNumber != null && product!.shelfNumber!.trim().isNotEmpty)
+              ? product.shelfNumber!.trim()
+              : null;
+      return BestSellingEntry(
+        name: acc.name,
+        category: liveCategory ?? acc.snapshotCategory,
+        shelfNumber: shelf,
+        quantity: acc.quantity,
+        revenue: acc.revenue,
+        product: product,
+      );
+    }).toList()
+      ..sort((a, b) {
+        final byQty = b.quantity.compareTo(a.quantity);
+        return byQty != 0 ? byQty : b.revenue.compareTo(a.revenue);
+      });
+
+    return entries.length > limit ? entries.sublist(0, limit) : entries;
+  }
+
+  /// Live products indexed by lower-cased, trimmed name. Used to show the
+  /// optional wholesale price / shelf number next to historical rows.
+  Map<String, Product> get productsByName {
+    final map = <String, Product>{};
+    for (final p in _productsBox.values) {
+      map[p.name.trim().toLowerCase()] = p;
+    }
+    return map;
+  }
+
+  // ---------------------------------------------------------------------
+  // Sale deletion
+  // ---------------------------------------------------------------------
+
+  /// Sum of the installments linked to a settled credit sale.
+  double linkedDebtPaymentsTotal(Sale settlement) {
+    if (!settlement.isDebtSettlement || settlement.debtKey == null) return 0.0;
+    return _salesBox.values
+        .where((s) => s.isDebtPayment && s.debtKey == settlement.debtKey)
+        .fold(0.0, (sum, s) => sum + s.totalAmount);
+  }
+
+  /// Deletes a sale record and returns its items to stock. For a settled
+  /// credit sale, every installment of that debt is removed as well, so
+  /// the money is reversed from total sales / profit exactly like
+  /// deleting a cash sale. Returns the names that could not be restocked
+  /// (product deleted or renamed).
+  Future<List<String>> deleteSaleAndRestock(Sale sale) async {
+    final List<String> notRestocked = [];
+    final products = productsByName;
+
+    for (final item in sale.items) {
+      final product = products[item.name.trim().toLowerCase()];
+      if (product != null) {
+        product.stockQuantity += item.quantity;
+        await product.save();
+      } else {
+        notRestocked.add(item.name);
+      }
+    }
+
+    if (sale.isDebtSettlement && sale.debtKey != null) {
+      final linked = _salesBox.values
+          .where((s) => s.isDebtPayment && s.debtKey == sale.debtKey)
+          .toList();
+      for (final payment in linked) {
+        await payment.delete();
+      }
+    }
+
+    await sale.delete();
+    return notRestocked;
+  }
+}
+
+enum BestSellingPeriod { day, week, month }
+
+class BestSellingEntry {
+  final String name;
+  final String? category;
+  final String? shelfNumber;
+  final int quantity;
+  final double revenue;
+  final Product? product;
+
+  const BestSellingEntry({
+    required this.name,
+    required this.category,
+    required this.shelfNumber,
+    required this.quantity,
+    required this.revenue,
+    required this.product,
+  });
+}
+
+class _BestSellingAccumulator {
+  final String name;
+  int quantity = 0;
+  double revenue = 0.0;
+  String? snapshotCategory;
+
+  _BestSellingAccumulator(this.name);
 }

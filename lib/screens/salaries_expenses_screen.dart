@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/salaries_expenses_provider.dart';
 import '../models/worker.dart';
 import '../models/expense.dart';
+import '../widgets/dispose_on_unmount.dart';
 
 class SalariesExpensesScreen extends StatefulWidget {
   const SalariesExpensesScreen({super.key});
@@ -17,7 +18,11 @@ class _SalariesExpensesScreenState extends State<SalariesExpensesScreen> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => DisposeOnUnmount(
+        // Controllers are disposed when the dialog is really unmounted
+        // (after its closing animation), not when pop() completes.
+        disposables: [nameController],
+        child: AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: Row(
           children: [
@@ -63,7 +68,8 @@ class _SalariesExpensesScreenState extends State<SalariesExpensesScreen> {
           ),
         ],
       ),
-    ).then((_) => nameController.dispose());
+      ),
+    );
   }
 
   void _showPayWorkerDialog(BuildContext context, Worker worker) {
@@ -72,7 +78,11 @@ class _SalariesExpensesScreenState extends State<SalariesExpensesScreen> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => DisposeOnUnmount(
+        // Controllers are disposed when the dialog is really unmounted
+        // (after its closing animation), not when pop() completes.
+        disposables: [amountController, noteController],
+        child: AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: Row(
           children: [
@@ -138,10 +148,8 @@ class _SalariesExpensesScreenState extends State<SalariesExpensesScreen> {
           ),
         ],
       ),
-    ).then((_) {
-      amountController.dispose();
-      noteController.dispose();
-    });
+      ),
+    );
   }
 
   void _showAddExpenseDialog(BuildContext context) {
@@ -150,7 +158,11 @@ class _SalariesExpensesScreenState extends State<SalariesExpensesScreen> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => DisposeOnUnmount(
+        // Controllers are disposed when the dialog is really unmounted
+        // (after its closing animation), not when pop() completes.
+        disposables: [amountController, noteController],
+        child: AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: Row(
           children: [
@@ -214,10 +226,8 @@ class _SalariesExpensesScreenState extends State<SalariesExpensesScreen> {
           ),
         ],
       ),
-    ).then((_) {
-      amountController.dispose();
-      noteController.dispose();
-    });
+      ),
+    );
   }
 
   Widget _buildSummaryCard({required IconData icon, required String title, required String value, required Color color}) {

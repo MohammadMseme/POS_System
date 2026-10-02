@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import 'pos_screen.dart';
 import 'products_screen.dart';
 import 'inventory_screen.dart';
@@ -16,31 +18,110 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
+/// One tab of the bottom navigation bar.
+class _NavTab {
+  final Widget screen;
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+
+  /// true -> also shown to the Employee role.
+  final bool employeeAllowed;
+
+  const _NavTab({
+    required this.screen,
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+    this.employeeAllowed = false,
+  });
+}
+
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _selectedIndex = 0;
 
-  // NEW: CalculatorScreen added right after Salaries/Expenses.
-  final List<Widget> _screens = const [
-    PosScreen(),
-    ProductsScreen(),
-    InventoryScreen(),
-    DebtsScreen(),
-    SuppliersScreen(),
-    SalariesExpensesScreen(),
-    CalculatorScreen(),
-    NotesScreen(),
-    SettingsScreen(),
+  // NEW (roles): every tab declares whether the Employee may see it.
+  // Employee: POS, Inventory (sales log only), Debts (repayments only),
+  // Calculator and Settings (lock app only). Admin: everything.
+  static const List<_NavTab> _allTabs = [
+    _NavTab(
+      screen: PosScreen(),
+      icon: Icons.point_of_sale_outlined,
+      selectedIcon: Icons.point_of_sale,
+      label: 'نقطة البيع',
+      employeeAllowed: true,
+    ),
+    _NavTab(
+      screen: ProductsScreen(),
+      icon: Icons.inventory_2_outlined,
+      selectedIcon: Icons.inventory_2,
+      label: 'المنتجات',
+    ),
+    _NavTab(
+      screen: InventoryScreen(),
+      icon: Icons.analytics_outlined,
+      selectedIcon: Icons.analytics,
+      label: 'الجرد',
+      employeeAllowed: true,
+    ),
+    _NavTab(
+      screen: DebtsScreen(),
+      icon: Icons.money_off_outlined,
+      selectedIcon: Icons.money_off,
+      label: 'الديون',
+      employeeAllowed: true,
+    ),
+    _NavTab(
+      screen: SuppliersScreen(),
+      icon: Icons.local_shipping_outlined,
+      selectedIcon: Icons.local_shipping,
+      label: 'التجار',
+    ),
+    _NavTab(
+      screen: SalariesExpensesScreen(),
+      icon: Icons.groups_outlined,
+      selectedIcon: Icons.groups,
+      label: 'رواتب',
+    ),
+    _NavTab(
+      screen: CalculatorScreen(),
+      icon: Icons.calculate_outlined,
+      selectedIcon: Icons.calculate,
+      label: 'حاسبة',
+      employeeAllowed: true,
+    ),
+    _NavTab(
+      screen: NotesScreen(),
+      icon: Icons.book_outlined,
+      selectedIcon: Icons.book,
+      label: 'الملاحظات',
+    ),
+    _NavTab(
+      screen: SettingsScreen(),
+      icon: Icons.settings_outlined,
+      selectedIcon: Icons.settings,
+      label: 'الإعدادات',
+      employeeAllowed: true,
+    ),
   ];
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final bool isAdmin = context.watch<AuthProvider>().isAdmin;
+
+    // Restricted pages are not just hidden from the bar - they are never
+    // built at all for the Employee, so their data can't leak.
+    final tabs = isAdmin
+        ? _allTabs
+        : _allTabs.where((t) => t.employeeAllowed).toList();
+    final int index = _selectedIndex.clamp(0, tabs.length - 1);
 
     return Scaffold(
       // استخدام IndexedStack يحافظ على حال البيانات في كل شاشة عند التنقل بينها ولا يعيد تحميلها من الصفر
       body: IndexedStack(
-        index: _selectedIndex,
-        children: _screens,
+        index: index,
+        children: tabs.map((t) => t.screen).toList(),
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -53,10 +134,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ],
         ),
         child: NavigationBar(
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: (index) {
+          selectedIndex: index,
+          onDestinationSelected: (i) {
             setState(() {
-              _selectedIndex = index;
+              _selectedIndex = i;
             });
           },
           // تخصيص الألوان والتصميم العصري الموحد
@@ -65,53 +146,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           elevation: 0,
           height: 65,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.point_of_sale_outlined),
-              selectedIcon: Icon(Icons.point_of_sale, color: Color(0xFF1565C0)),
-              label: 'نقطة البيع',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.inventory_2_outlined),
-              selectedIcon: Icon(Icons.inventory_2, color: Color(0xFF1565C0)),
-              label: 'المنتجات',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.analytics_outlined),
-              selectedIcon: Icon(Icons.analytics, color: Color(0xFF1565C0)),
-              label: 'الجرد',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.money_off_outlined),
-              selectedIcon: Icon(Icons.money_off, color: Color(0xFF1565C0)),
-              label: 'الديون',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.local_shipping_outlined),
-              selectedIcon: Icon(Icons.local_shipping, color: Color(0xFF1565C0)),
-              label: 'التجار',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.groups_outlined),
-              selectedIcon: Icon(Icons.groups, color: Color(0xFF1565C0)),
-              label: 'رواتب',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.calculate_outlined),
-              selectedIcon: Icon(Icons.calculate, color: Color(0xFF1565C0)),
-              label: 'حاسبة',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.book_outlined),
-              selectedIcon: Icon(Icons.book, color: Color(0xFF1565C0)),
-              label: 'الملاحظات',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings, color: Color(0xFF1565C0)),
-              label: 'الإعدادات',
-            ),
-          ],
+          destinations: tabs
+              .map((t) => NavigationDestination(
+                    icon: Icon(t.icon),
+                    selectedIcon: Icon(t.selectedIcon, color: const Color(0xFF1565C0)),
+                    label: t.label,
+                  ))
+              .toList(),
         ),
       ),
     );

@@ -1,13 +1,15 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:hive/hive.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
+import '../widgets/backup_dialog.dart';
 import '../providers/inventory_provider.dart';
 import '../providers/debt_supplier_provider.dart';
 import '../providers/product_provider.dart';
 import '../models/sale.dart';
 import '../models/product.dart';
+import '../models/debt.dart';
+import '../widgets/wholesale_price_reveal.dart';
+import 'debts_screen.dart' show CapitalStatusBadge;
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -23,6 +25,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
   // above - this is its own toggle just for the "الأصناف الراكدة" panel.
   int _stagnationDays = 7;
   static const List<int> _stagnationOptions = [7, 15, 30, 60];
+
+  // NEW (Best-selling items): its own period toggle + expand state,
+  // independent from the page-wide period selector above.
+  BestSellingPeriod _bestSellingPeriod = BestSellingPeriod.day;
+  bool _bestSellingExpanded = false;
 
   static const _periods = [
     {'value': 'يومي', 'label': 'اليوم', 'icon': Icons.today_outlined},
@@ -40,99 +47,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
     });
   }
 
-  // دالة النسخ الاحتياطي الذكي الشامل لكل بيانات البرنامج (منطق دون تغيير)
-  Future<void> _smartBackupToExternalDrive(BuildContext context) async {
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final dbDirectory = Directory(appDir.path);
-
-      if (!dbDirectory.existsSync()) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('مجلد البيانات غير موجود!'), backgroundColor: Colors.red),
-        );
-        return;
-      }
-
-      Directory? externalDrive;
-      for (var letter in ['D', 'G', 'H', 'I', 'J']) {
-        final dir = Directory('$letter:\\');
-        if (dir.existsSync()) {
-          externalDrive = dir;
-          break;
-        }
-      }
-
-      if (!mounted) return;
-      if (externalDrive == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('الرجاء التأكد من توصيل الفلاشة أو الهارد الخارجي أولاً!'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      final backupDir = Directory('${externalDrive.path}SamaBackup');
-      if (!backupDir.existsSync()) {
-        backupDir.createSync(recursive: true);
-      }
-
-      final files = dbDirectory.listSync();
-      int copiedCount = 0;
-
-      for (var file in files) {
-        if (file is File) {
-          final fileName = file.path.split(Platform.pathSeparator).last;
-          final targetPath = '${backupDir.path}${Platform.pathSeparator}$fileName';
-          final targetFile = File(targetPath);
-
-          bool shouldCopy = false;
-
-          if (!targetFile.existsSync()) {
-            shouldCopy = true;
-          } else {
-            final sourceModified = file.lastModifiedSync();
-            final targetModified = targetFile.lastModifiedSync();
-            if (sourceModified.isAfter(targetModified)) {
-              shouldCopy = true;
-            }
-          }
-
-          if (shouldCopy) {
-            file.copySync(targetPath);
-            copiedCount++;
-          }
-        }
-      }
-
-      if (!mounted) return;
-      if (copiedCount > 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('تم بنجاح: نسخ وتحديث ($copiedCount) من الملفات الشاملة على الهارد الخارجي.'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('جميع البيانات منسوخة مسبقاً ولا توجد بيانات جديدة لتحديثها!'),
-            backgroundColor: Colors.blue,
-          ),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('حدث خطأ أثناء النسخ: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
+  // CHANGED: the old backup copied EVERY file in the Windows Documents
+  // folder (Hive used to store the database there, mixed with the user's
+  // own files) to the first of D/G/H/I/J that existed - often an internal
+  // disk. The new smart backup (BackupService + backup dialog) lets the
+  // user pick the flash drive / external disk, copies only the database
+  // folder, and on later runs only appends the new records.
+  Future<void> _openSmartBackup() => showSmartBackupDialog(context);
 
   List<Sale> _getFilteredSales(List<Sale> sales) {
     if (_selectedPeriod == 'الكل') {
@@ -247,7 +168,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             margin: const EdgeInsets.symmetric(vertical: 4),
                             child: ListTile(
                               title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                              subtitle: Text('الكمية: ${product.stockQuantity} | سعر الجملة: ${product.costPrice} شيكل'),
+                              // "سعر الشراء" (cost) - renamed so it is not
+                              // confused with the new, informational-only
+                              // wholesale price field (سعر الجملة).
+                              subtitle: Text('الكمية: ${product.stockQuantity} | سعر الشراء: ${product.costPrice} شيكل'),
                               trailing: Text('${totalItemCost.toStringAsFixed(2)} شيكل', style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
                             ),
                           );
@@ -319,10 +243,30 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  // CHANGED: credit-sale items now stay pending (and out of the sales
+  // records) until the whole debt is paid. This dialog lists them per
+  // debt, with the capital recovery status (تم استرداد رأس المال) next to
+  // each item.
   void _showDebtInventoryDialog(BuildContext context, InventoryProvider inventory) {
-    final pendingRows = inventory.pendingDebtInventoryRows;
+    final List<Debt> debts = inventory.openDebts;
     final expectedProfit = inventory.totalExpectedDebtProfit;
+    final pendingCapital = inventory.totalPendingDebtCapital;
     final totalDebts = inventory.totalCustomerDebts;
+
+    Widget summaryValue(String label, double value, Color color) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: TextStyle(fontSize: 11.5, color: Colors.grey.shade700)),
+          const SizedBox(height: 2),
+          Text(
+            '${value.toStringAsFixed(2)} شيكل',
+            style: TextStyle(fontWeight: FontWeight.bold, color: color),
+          ),
+        ],
+      );
+    }
 
     showDialog(
       context: context,
@@ -336,42 +280,122 @@ class _InventoryScreenState extends State<InventoryScreen> {
           ],
         ),
         content: SizedBox(
-          width: 500,
-          height: 400,
+          width: 580,
+          height: 460,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
+                width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: Colors.purple.shade50,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.purple.shade200),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Wrap(
+                  spacing: 24,
+                  runSpacing: 8,
                   children: [
-                    Text('إجمالي الديون: ${totalDebts.toStringAsFixed(2)} شيكل', style: const TextStyle(fontWeight: FontWeight.bold)),
-                    Text('الأرباح المتوقعة: ${expectedProfit.toStringAsFixed(2)} شيكل', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                    summaryValue('إجمالي الديون المتبقية', totalDebts, Colors.purple.shade700),
+                    summaryValue('رأس مال لم يُسترد بعد', pendingCapital, Colors.orange.shade800),
+                    summaryValue('أرباح متوقعة (غير محتسبة بعد)', expectedProfit, Colors.green.shade700),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              const Text('الأصناف المباعة بالدين ولم تُسدد بعد:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
+              Text(
+                'الدفعات تُضاف لإجمالي المبيعات فوراً، وتسترد رأس المال أولاً ثم تُحتسب ربحاً. '
+                'تظهر الأصناف في سجل المبيعات بعد سداد الدين بالكامل.',
+                style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 10),
               Expanded(
-                child: pendingRows.isEmpty
-                    ? const Center(child: Text('لا توجد أصناف معلقة في الديون حالياً!'))
+                child: debts.isEmpty
+                    ? const Center(child: Text('لا توجد ديون معلقة حالياً!'))
                     : ListView.builder(
-                        itemCount: pendingRows.length,
+                        itemCount: debts.length,
                         itemBuilder: (context, index) {
-                          final row = pendingRows[index];
+                          final debt = debts[index];
+                          final bool hasItems = debt.saleItems.isNotEmpty;
+                          final bool recovered = debt.isCapitalRecovered;
+
                           return Card(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            child: ListTile(
-                              title: Text(row['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                              subtitle: Text('الزبون: ${row['customerName']} | الكمية: ${row['quantity']}'),
-                              trailing: Text('${row['actualPrice'].toStringAsFixed(2)} شيكل', style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+                            margin: const EdgeInsets.symmetric(vertical: 5),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.person_outline, size: 18, color: Colors.purple.shade400),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          debt.customerName,
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                        ),
+                                      ),
+                                      Text(
+                                        'المتبقي: ${debt.remainingAmount.toStringAsFixed(2)} شيكل',
+                                        style: TextStyle(
+                                          color: Colors.red.shade700,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (hasItems) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'رأس المال المسترد: ${debt.capitalRecovered.clamp(0.0, debt.totalCost).toStringAsFixed(2)}'
+                                      ' / ${debt.totalCost.toStringAsFixed(2)} شيكل'
+                                      ' • ربح محتسب: ${debt.profitRealized.toStringAsFixed(2)}'
+                                      ' • ربح متبقٍ: ${debt.pendingProfit.toStringAsFixed(2)}',
+                                      style: TextStyle(fontSize: 11.5, color: Colors.grey.shade700),
+                                    ),
+                                    const Divider(height: 16),
+                                    ...debt.saleItems.map((item) {
+                                      final double lineTotal =
+                                          (item.sellPrice - item.discountPerUnit) * item.quantity;
+                                      return Padding(
+                                        padding: const EdgeInsets.only(bottom: 6),
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.circle, size: 7, color: Colors.purple.shade200),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                '${item.name}  ×${item.quantity}',
+                                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                              ),
+                                            ),
+                                            CapitalStatusBadge(recovered: recovered, compact: true),
+                                            const SizedBox(width: 10),
+                                            Text(
+                                              '${lineTotal.toStringAsFixed(2)} شيكل',
+                                              style: const TextStyle(
+                                                color: Colors.blue,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12.5,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }),
+                                  ] else
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 6),
+                                      child: Text(
+                                        'دين مسجل يدوياً بدون أصناف: ${debt.itemsTaken.join('، ')}',
+                                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           );
                         },
@@ -488,12 +512,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _confirmDeleteSale(BuildContext context, Sale saleObj) async {
+    final inventory = Provider.of<InventoryProvider>(context, listen: false);
+    final bool isSettlement = saleObj.isDebtSettlement;
+    final double linkedPayments =
+        isSettlement ? inventory.linkedDebtPaymentsTotal(saleObj) : 0.0;
+
     bool? confirm = await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('تأكيد الحذف وإرجاع الكميات'),
-        content: const Text('هل أنت متأكد من حذف حركة البيع؟ سيتم إعادة الكميات المباعة تلقائياً إلى المخزون.'),
+        content: Text(
+          isSettlement
+              ? 'هذه الحركة لبيع بالدين تم سداده بالكامل. سيتم إعادة الكميات المباعة إلى المخزون، '
+                  'وإلغاء دفعات السداد المرتبطة بها '
+                  '(${linkedPayments.toStringAsFixed(2)} شيكل) من إجمالي المبيعات والربح. هل أنت متأكد؟'
+              : 'هل أنت متأكد من حذف حركة البيع؟ سيتم إعادة الكميات المباعة تلقائياً إلى المخزون.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -512,30 +547,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (confirm != true) return;
     if (!context.mounted) return;
 
-    final productBox = Hive.box<Product>('products');
+    final productProvider = Provider.of<ProductProvider>(context, listen: false);
+    final List<String> notRestocked = await inventory.deleteSaleAndRestock(saleObj);
 
-    final List<String> notRestocked = [];
-
-    for (var item in saleObj.items) {
-      Product? matchedProduct;
-      try {
-        matchedProduct = productBox.values.firstWhere((p) => p.name == item.name);
-      } catch (_) {
-        matchedProduct = null;
-      }
-
-      if (matchedProduct != null) {
-        matchedProduct.stockQuantity += item.quantity;
-        await matchedProduct.save();
-      } else {
-        notRestocked.add(item.name);
-      }
-    }
-
-    await saleObj.delete();
-
-    if (!context.mounted) return;
-    Provider.of<ProductProvider>(context, listen: false).refreshProducts();
+    productProvider.refreshProducts();
 
     if (!context.mounted) return;
     if (notRestocked.isEmpty) {
@@ -562,6 +577,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   Widget build(BuildContext context) {
     final inventory = Provider.of<InventoryProvider>(context);
+    // NEW (roles): the Employee only gets the sales log (to handle
+    // returns) - no financial cards, no analysis panels, no cost/profit
+    // columns, no backup.
+    final bool isAdmin = Provider.of<AuthProvider>(context).isAdmin;
     final debtProvider = Provider.of<DebtSupplierProvider>(context);
     final productProvider = Provider.of<ProductProvider>(context);
 
@@ -593,6 +612,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     double grossProfit = 0.0;
 
     List<Map<String, dynamic>> individualSaleRows = [];
+    // Live products by name - used only to reveal the optional,
+    // informational wholesale price next to the selling price.
+    final productsByName = inventory.productsByName;
 
     for (var sale in filteredSales) {
       totalRevenue += sale.totalAmount;
@@ -616,6 +638,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
           'discount': item.discountPerUnit,
           'actualSellPrice': actualSellPrice,
           'profit': itemProfit,
+          // NEW: credit sale that was fully paid - shown like a cash sale,
+          // with a small badge. Its money was already counted through the
+          // debt installments, so it adds nothing to the totals above.
+          'isDebtSettlement': sale.isDebtSettlement,
+          'wholesalePrice': productsByName[item.name.trim().toLowerCase()]?.wholesalePrice,
         });
       }
     }
@@ -632,6 +659,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final double netProfit = grossProfit - totalProfitDeductionsInPeriod;
 
     final stagnantProducts = inventory.getStagnantProducts(_stagnationDays);
+    final bestSellingItems = inventory.getBestSellingItems(_bestSellingPeriod);
 
     return Scaffold(
       backgroundColor: const Color(0xfff4f7fb),
@@ -640,14 +668,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
         backgroundColor: const Color(0xFF1565C0),
         foregroundColor: Colors.white,
         titleSpacing: 20,
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.analytics_outlined),
-            SizedBox(width: 10),
-            Text('الجرد والتقارير المالية', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Icon(Icons.analytics_outlined),
+            const SizedBox(width: 10),
+            Text(
+              isAdmin ? 'الجرد والتقارير المالية' : 'سجل حركات البيع والمرتجعات',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
           ],
         ),
         actions: [
+          if (isAdmin)
           Padding(
             padding: const EdgeInsets.only(left: 12),
             child: IconButton(
@@ -659,8 +691,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 ),
                 child: const Icon(Icons.sd_storage_outlined),
               ),
-              tooltip: 'نسخ احتياطي شامل للهارد الخارجي',
-              onPressed: () => _smartBackupToExternalDrive(context),
+              tooltip: 'نسخ احتياطي ذكي للفلاشة / الهارد الخارجي',
+              onPressed: _openSmartBackup,
             ),
           ),
         ],
@@ -722,6 +754,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
             const SizedBox(height: 16),
 
+            // Financial overview + analysis panels: Admin only.
+            if (isAdmin) ...[
             // ---------- Quick stats ----------
             Row(
               children: [
@@ -801,15 +835,36 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
             const SizedBox(height: 16),
 
-            // ---------- Stagnant items panel ----------
-            _StagnantItemsSection(
-              stagnantProducts: stagnantProducts,
-              selectedDays: _stagnationDays,
-              options: _stagnationOptions,
-              onDaysChanged: (d) => setState(() => _stagnationDays = d),
+            // ---------- Best-selling + stagnant items panels ----------
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _BestSellingSection(
+                    items: bestSellingItems,
+                    period: _bestSellingPeriod,
+                    expanded: _bestSellingExpanded,
+                    onPeriodChanged: (p) => setState(() {
+                      _bestSellingPeriod = p;
+                      _bestSellingExpanded = true;
+                    }),
+                    onToggle: () => setState(() => _bestSellingExpanded = !_bestSellingExpanded),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _StagnantItemsSection(
+                    stagnantProducts: stagnantProducts,
+                    selectedDays: _stagnationDays,
+                    options: _stagnationOptions,
+                    onDaysChanged: (d) => setState(() => _stagnationDays = d),
+                  ),
+                ),
+              ],
             ),
 
             const SizedBox(height: 16),
+            ],
 
             // ---------- Detailed sales table ----------
             Row(
@@ -827,6 +882,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   child: Text(
                     '${individualSaleRows.length}',
                     style: const TextStyle(color: Color(0xFF1565C0), fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'الأصناف المباعة بالدين تظهر هنا بعد سداد الدين بالكامل',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500),
                   ),
                 ),
               ],
@@ -880,16 +943,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               dataRowColor: WidgetStateProperty.resolveWith((states) => Colors.transparent),
                               columnSpacing: 22,
                               horizontalMargin: 16,
-                              columns: const [
-                                DataColumn(label: Text('الوقت')),
-                                DataColumn(label: Text('اسم الصنف')),
-                                DataColumn(label: Text('الكمية')),
-                                DataColumn(label: Text('سعر الجملة للحبة')),
-                                DataColumn(label: Text('السعر الأصلي للحبة')),
-                                DataColumn(label: Text('الخصم للحبة')),
-                                DataColumn(label: Text('سعر البيع الفعلي للحبة')),
-                                DataColumn(label: Text('إجمالي الربح للكل')),
-                                DataColumn(label: Text('')),
+                              // Cost and profit columns are Admin-only
+                              // (cells below use the same conditions).
+                              columns: [
+                                const DataColumn(label: Text('الوقت')),
+                                const DataColumn(label: Text('اسم الصنف')),
+                                const DataColumn(label: Text('الكمية')),
+                                if (isAdmin) const DataColumn(label: Text('سعر التكلفة للحبة')),
+                                const DataColumn(label: Text('السعر الأصلي للحبة')),
+                                const DataColumn(label: Text('الخصم للحبة')),
+                                const DataColumn(label: Text('سعر البيع الفعلي للحبة')),
+                                if (isAdmin) const DataColumn(label: Text('إجمالي الربح للكل')),
+                                const DataColumn(label: Text('')),
                               ],
                               rows: List<DataRow>.generate(individualSaleRows.length, (i) {
                                 final row = individualSaleRows[i];
@@ -900,6 +965,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 final double profit = row['profit'];
                                 final String? category = row['category'] as String?;
                                 final bool hasCategory = category != null && category.trim().isNotEmpty;
+                                final bool isDebtSettlement = row['isDebtSettlement'] == true;
 
                                 return DataRow(
                                   color: WidgetStateProperty.all(i.isEven ? Colors.white : Colors.grey.shade50),
@@ -939,12 +1005,38 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                               ),
                                             ),
                                           ],
+                                          if (isDebtSettlement) ...[
+                                            const SizedBox(width: 6),
+                                            Tooltip(
+                                              message: 'بيع بالدين تم سداده بالكامل',
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.orange.withValues(alpha: 0.08),
+                                                  borderRadius: BorderRadius.circular(20),
+                                                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                                                ),
+                                                child: Text(
+                                                  'دين مسدد',
+                                                  style: TextStyle(
+                                                    fontSize: 10.5,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.orange.shade800,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ],
                                       ),
                                     ),
                                     DataCell(Text('${row['quantity']}')),
-                                    DataCell(Text('${row['costPrice']} ₪')),
-                                    DataCell(Text('${row['sellPrice']} ₪')),
+                                    if (isAdmin) DataCell(Text('${row['costPrice']} ₪')),
+                                    // NEW: tap to reveal the optional wholesale price.
+                                    DataCell(WholesalePriceReveal(
+                                      priceText: '${row['sellPrice']} ₪',
+                                      wholesalePrice: row['wholesalePrice'] as double?,
+                                    )),
                                     DataCell(Text(
                                       '${row['discount']} ₪',
                                       style: TextStyle(color: (row['discount'] as num) > 0 ? Colors.red.shade600 : Colors.grey.shade400),
@@ -953,6 +1045,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                       '${row['actualSellPrice'].toStringAsFixed(2)} ₪',
                                       style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1565C0)),
                                     )),
+                                    if (isAdmin)
                                     DataCell(
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
@@ -1194,6 +1287,263 @@ class _StagnantItemsSection extends StatelessWidget {
                     subtitle: Text(
                       'الكمية المتوفرة: ${p.stockQuantity}',
                       style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+/// NEW: "الأصناف الأكثر مبيعاً" panel. Collapsible card with its own
+/// Day / Week / Month toggle. When expanded it lists the top-selling
+/// items of the chosen period with category (اسم القسم) and shelf number
+/// (رقم الرف). The selling price can be tapped to reveal the optional
+/// wholesale price.
+class _BestSellingSection extends StatelessWidget {
+  final List<BestSellingEntry> items;
+  final BestSellingPeriod period;
+  final bool expanded;
+  final ValueChanged<BestSellingPeriod> onPeriodChanged;
+  final VoidCallback onToggle;
+
+  const _BestSellingSection({
+    required this.items,
+    required this.period,
+    required this.expanded,
+    required this.onPeriodChanged,
+    required this.onToggle,
+  });
+
+  static const Map<BestSellingPeriod, String> _labels = {
+    BestSellingPeriod.day: 'يوم',
+    BestSellingPeriod.week: 'أسبوع',
+    BestSellingPeriod.month: 'شهر',
+  };
+
+  static const Map<BestSellingPeriod, String> _emptyLabels = {
+    BestSellingPeriod.day: 'اليوم',
+    BestSellingPeriod.week: 'آخر 7 أيام',
+    BestSellingPeriod.month: 'هذا الشهر',
+  };
+
+  static const Color _accent = Color(0xFF00897B);
+
+  Widget _chip(IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 10, color: color),
+          const SizedBox(width: 3),
+          Text(
+            label,
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              InkWell(
+                onTap: onToggle,
+                borderRadius: BorderRadius.circular(10),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _accent.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.local_fire_department_outlined, color: _accent, size: 19),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('الأصناف الأكثر مبيعاً', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _accent.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '${items.length}',
+                        style: const TextStyle(color: _accent, fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      expanded ? Icons.expand_less : Icons.expand_more,
+                      color: Colors.grey.shade600,
+                    ),
+                  ],
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: BestSellingPeriod.values.map((p) {
+                  final selected = p == period;
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: InkWell(
+                      onTap: () => onPeriodChanged(p),
+                      borderRadius: BorderRadius.circular(20),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: selected ? _accent : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          _labels[p]!,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.bold,
+                            color: selected ? Colors.white : Colors.grey.shade700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                'لا توجد مبيعات مسجلة خلال ${_emptyLabels[period]}',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5),
+              ),
+            )
+          else if (!expanded)
+            InkWell(
+              onTap: onToggle,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.emoji_events_outlined, size: 16, color: Colors.amber.shade700),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'الأعلى مبيعاً: ${items.first.name} (${items.first.quantity} قطعة) - اضغط لعرض القائمة',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 130,
+              child: ListView.separated(
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final e = items[index];
+                  final bool hasCategory = e.category != null && e.category!.isNotEmpty;
+                  final bool hasShelf = e.shelfNumber != null && e.shelfNumber!.isNotEmpty;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 12,
+                          backgroundColor: index < 3 ? Colors.amber.shade100 : Colors.grey.shade100,
+                          child: Text(
+                            '${index + 1}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: index < 3 ? Colors.amber.shade900 : Colors.grey.shade700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                e.name,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                              ),
+                              const SizedBox(height: 3),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 3,
+                                children: [
+                                  _chip(
+                                    Icons.category_outlined,
+                                    hasCategory ? e.category! : 'بدون قسم',
+                                    hasCategory ? Colors.deepPurple : Colors.grey,
+                                  ),
+                                  _chip(
+                                    Icons.shelves,
+                                    hasShelf ? 'الرف: ${e.shelfNumber!}' : 'بدون رف',
+                                    hasShelf ? Colors.brown : Colors.grey,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${e.quantity} قطعة',
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: _accent, fontSize: 13),
+                            ),
+                            if (e.product != null)
+                              WholesalePriceReveal(
+                                priceText: '${e.product!.sellPrice.toStringAsFixed(2)} ₪',
+                                wholesalePrice: e.product!.wholesalePrice,
+                                priceStyle: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                              ),
+                          ],
+                        ),
+                      ],
                     ),
                   );
                 },

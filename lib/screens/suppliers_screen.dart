@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/debt_supplier_provider.dart';
 import '../models/supplier.dart';
 import '../models/supplier_entry.dart';
+import '../widgets/dispose_on_unmount.dart';
 
 class SuppliersScreen extends StatefulWidget {
   const SuppliersScreen({super.key});
@@ -52,7 +53,11 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => DisposeOnUnmount(
+        // Controllers are disposed when the dialog is really unmounted
+        // (after its closing animation), not when pop() completes.
+        disposables: [payController, noteController],
+        child: AlertDialog(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
         ),
@@ -344,10 +349,8 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
           ),
         ],
       ),
-    ).then((_) {
-      payController.dispose();
-      noteController.dispose();
-    });
+      ),
+    );
   }
 
   void _showAddSupplierDialog(BuildContext context) {
@@ -357,7 +360,11 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => DisposeOnUnmount(
+        // Controllers are disposed when the dialog is really unmounted
+        // (after its closing animation), not when pop() completes.
+        disposables: [nameController, remainingController, noteController],
+        child: AlertDialog(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
         ),
@@ -476,11 +483,8 @@ class _SuppliersScreenState extends State<SuppliersScreen> {
           ),
         ],
       ),
-    ).then((_) {
-      nameController.dispose();
-      remainingController.dispose();
-      noteController.dispose();
-    });
+      ),
+    );
   }
 
   Widget _buildSummaryCard({

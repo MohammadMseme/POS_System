@@ -35,6 +35,15 @@ class Product extends HiveObject {
   @HiveField(7)
   String? shelfNumber; // رقم الرف - نص حر (أرقام/حروف/رموز مثل A-1, B#2)
 
+  // NEW: optional wholesale price (سعر الجملة). STRICTLY an informational
+  // reference for the seller (to help decide a manual discount). It is
+  // never read by any financial calculation - totals, profit, cost of
+  // goods and debt capital recovery all keep using costPrice/sellPrice
+  // only. Appended as a new field index, so older records read it as
+  // null (= not set, never displayed).
+  @HiveField(8)
+  double? wholesalePrice;
+
   Product({
     this.barcode = '',
     required this.name,
@@ -44,5 +53,9 @@ class Product extends HiveObject {
     DateTime? createdAt,
     this.category,
     this.shelfNumber,
+    this.wholesalePrice,
   }) : createdAt = createdAt ?? DateTime.now();
+
+  /// True only when a usable wholesale price has been entered.
+  bool get hasWholesalePrice => wholesalePrice != null && wholesalePrice! > 0;
 }

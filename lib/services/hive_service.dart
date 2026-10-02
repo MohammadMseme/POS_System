@@ -16,14 +16,49 @@ import '../models/expense.dart';
 class HiveService {
   /// Names of boxes that failed to open normally during this run and had
   /// to be quarantined (their original files were moved, NOT deleted, to
-  /// `hive_quarantine/` inside the app's documents folder). The app's UI
+  /// `hive_quarantine/` inside the dedicated data folder). The app's UI
   /// layer should check this after startup and tell the user their data
   /// for these boxes needs manual recovery, instead of the previous
   /// behavior of silently wiping the box with no trace.
   static final List<String> recoveredBoxWarnings = [];
 
+  /// NEW: name of the single, dedicated folder that holds ALL Hive files.
+  static const String dataFolderName = 'fikra_data';
+
+  /// Every box the app uses (also used by the backup service).
+  static const List<String> boxNames = [
+    'products',
+    'sales',
+    'suppliers',
+    'debts',
+    'notes',
+    'workers',
+    'expenses',
+    'settings',
+  ];
+
+  static Directory? _dataDirectory;
+
+  /// The folder holding all Hive files. Valid after [init].
+  static Directory get dataDirectory {
+    final dir = _dataDirectory;
+    if (dir == null) {
+      throw StateError('HiveService.init() must be called first');
+    }
+    return dir;
+  }
+
   static Future<void> init() async {
-    await Hive.initFlutter();
+    // CHANGED: Hive.initFlutter() stored every box directly in the
+    // Windows "Documents" folder, mixed with the user's own files. All
+    // Hive files now live in ONE dedicated folder (see
+    // _resolveDataDirectory), and data from the old location is copied
+    // over automatically on first start.
+    final dataDir = await _resolveDataDirectory();
+    _dataDirectory = dataDir;
+    await _migrateFromDocumentsFolder(dataDir);
+    Hive.init(dataDir.path);
+    debugPrint('[HiveService] Data folder: ${dataDir.path}');
 
     // تسجيل Adapters
     if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(ProductAdapter());
@@ -64,6 +99,135 @@ class HiveService {
     // safe-open path as every other box, so a corrupted settings file is
     // quarantined (never deleted) just like the rest.
     await _openBoxSafely<String>('settings');
+
+    // NEW: give debts written by older versions the capital-recovery
+    // counters used by the credit-sale logic, before any screen reads them.
+    await _migrateDebts();
+  }
+
+  /// Picks the dedicated data folder, in this order:
+  ///  1. Running from a Flutter project build (debug or release, i.e. the
+  ///     exe lives under `<project>\build\windows\...`):
+  ///     `<project>\fikra_data` - directly inside the project folder, and
+  ///     safe from `flutter clean` (which deletes `build\`).
+  ///  2. Installed / copied app: `<folder of the .exe>\fikra_data`.
+  ///  3. Fallback when that folder is not writable (e.g. Program Files):
+  ///     `<AppData support folder>\fikra_data`.
+  static Future<Directory> _resolveDataDirectory() async {
+    final sep = Platform.pathSeparator;
+    final candidates = <String>[];
+
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final marker = '${sep}build$sep';
+      final lower = exeDir.toLowerCase();
+      final buildIndex = lower.lastIndexOf(marker);
+      if (buildIndex > 0 &&
+          (lower.contains('${sep}build${sep}windows$sep') ||
+              lower.contains('${sep}build${sep}linux$sep') ||
+              lower.contains('${sep}build${sep}macos$sep'))) {
+        candidates.add('${exeDir.substring(0, buildIndex)}$sep$dataFolderName');
+      }
+      candidates.add('$exeDir$sep$dataFolderName');
+    } catch (e) {
+      debugPrint('[HiveService] Could not resolve executable folder: $e');
+    }
+
+    try {
+      final support = await getApplicationSupportDirectory();
+      candidates.add('${support.path}$sep$dataFolderName');
+    } catch (e) {
+      debugPrint('[HiveService] Could not resolve support folder: $e');
+    }
+
+    for (final path in candidates) {
+      final dir = Directory(path);
+      if (await _isWritable(dir)) return dir;
+    }
+    throw FileSystemException('No writable folder found for the database', candidates.join(' | '));
+  }
+
+  static Future<bool> _isWritable(Directory dir) async {
+    try {
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final probe = File('${dir.path}${Platform.pathSeparator}.write_test');
+      await probe.writeAsString('ok', flush: true);
+      await probe.delete();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// One-time copy of the existing database from the old location (the
+  /// Documents folder used by Hive.initFlutter) into [dataDir]. The old
+  /// files are COPIED, never moved or deleted, so they stay as a safety
+  /// copy. A marker file makes sure this only ever runs once.
+  static Future<void> _migrateFromDocumentsFolder(Directory dataDir) async {
+    final sep = Platform.pathSeparator;
+    final marker = File('${dataDir.path}$sep.migrated_from_documents');
+    if (await marker.exists()) return;
+
+    try {
+      final oldDir = await getApplicationDocumentsDirectory();
+      if (oldDir.absolute.path.toLowerCase() == dataDir.absolute.path.toLowerCase()) {
+        await marker.writeAsString(DateTime.now().toIso8601String());
+        return;
+      }
+      int copied = 0;
+      for (final name in boxNames) {
+        final source = File('${oldDir.path}$sep$name.hive');
+        final target = File('${dataDir.path}$sep$name.hive');
+        // Never overwrite data that already exists in the new folder.
+        if (await source.exists() && !await target.exists()) {
+          await source.copy(target.path);
+          copied++;
+        }
+      }
+      await marker.writeAsString(
+        'Migrated $copied box file(s) from ${oldDir.path} on ${DateTime.now().toIso8601String()}',
+      );
+      if (copied > 0) {
+        debugPrint('[HiveService] Copied $copied box file(s) from ${oldDir.path}');
+      }
+    } catch (e, stack) {
+      // No marker on failure -> retried on the next start.
+      debugPrint('[HiveService] Migration from Documents failed: $e');
+      debugPrint('$stack');
+    }
+  }
+
+  /// Writes any buffered changes of every open box to disk. Called right
+  /// before a backup so the copied files are complete.
+  static Future<void> flushAll() async {
+    Future<void> flush<T>(String name) async {
+      if (Hive.isBoxOpen(name)) await Hive.box<T>(name).flush();
+    }
+
+    await flush<Product>('products');
+    await flush<Sale>('sales');
+    await flush<Supplier>('suppliers');
+    await flush<Debt>('debts');
+    await flush<Note>('notes');
+    await flush<Worker>('workers');
+    await flush<Expense>('expenses');
+    await flush<String>('settings');
+  }
+
+  /// Non-destructive, idempotent upgrade of old Debt records (see
+  /// Debt.ensureTracking). A failure here never blocks app start-up.
+  static Future<void> _migrateDebts() async {
+    try {
+      final box = Hive.box<Debt>('debts');
+      for (final debt in box.values.toList()) {
+        if (debt.ensureTracking()) {
+          await debt.save();
+        }
+      }
+    } catch (e, stack) {
+      debugPrint('[HiveService] Debt migration skipped: $e');
+      debugPrint('$stack');
+    }
   }
 
   /// Opens a box, and if that fails, NEVER deletes the underlying data.
@@ -123,7 +287,8 @@ class HiveService {
   /// prefixed with a timestamp so repeated failures never overwrite each
   /// other. The files are never permanently discarded by this method.
   static Future<void> _quarantineBoxFiles(String boxName) async {
-    final appDir = await getApplicationDocumentsDirectory();
+    // CHANGED: quarantine lives inside the dedicated data folder now.
+    final appDir = dataDirectory;
     final quarantineDir = Directory(
       '${appDir.path}${Platform.pathSeparator}hive_quarantine',
     );

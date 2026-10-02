@@ -7,8 +7,21 @@ enum SaleSource {
   @HiveField(0)
   pos,
 
+  /// A cash installment received against a customer debt. Since the
+  /// credit-sale rework these records carry NO items - only money
+  /// (totalAmount = the amount paid, totalProfit = the part of it that
+  /// was profit after the debt's capital was fully recovered). Records
+  /// written by older versions may still carry proportional items.
   @HiveField(1)
   debtPayment,
+
+  /// NEW: written once, at the moment a credit sale is FULLY paid off.
+  /// Carries the debt's items so they appear in the sales records exactly
+  /// like a cash sale. Its totalAmount/totalProfit are always 0 because
+  /// the money was already counted by the debtPayment installments -
+  /// this record exists for item history only and never double-counts.
+  @HiveField(2)
+  debtSettlement,
 }
 
 @HiveType(typeId: 1)
@@ -65,11 +78,23 @@ class Sale extends HiveObject {
   @HiveField(4)
   SaleSource source;
 
+  /// NEW: Hive key of the Debt this record belongs to (only for
+  /// debtPayment / debtSettlement records created after the credit-sale
+  /// rework). Lets the app find every installment of a debt, e.g. to
+  /// reverse them all when a settled credit sale is deleted. Null for
+  /// cash sales and for records written by older versions.
+  @HiveField(5)
+  int? debtKey;
+
   Sale({
     required this.items,
     required this.totalAmount,
     required this.totalProfit,
     required this.createdAt,
     this.source = SaleSource.pos,
+    this.debtKey,
   });
+
+  bool get isDebtSettlement => source == SaleSource.debtSettlement;
+  bool get isDebtPayment => source == SaleSource.debtPayment;
 }

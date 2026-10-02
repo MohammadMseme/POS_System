@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/note.dart';
+import '../widgets/dispose_on_unmount.dart';
 
 class NotesScreen extends StatefulWidget {
   const NotesScreen({super.key});
@@ -47,14 +48,17 @@ class _NotesScreenState extends State<NotesScreen> {
       text: existingNote?.content ?? '',
     );
 
-    // FIXED: these controllers were previously never disposed - every
-    // note opened for add/edit leaked a pair of TextEditingControllers.
-    // showDialog's Future completes on any dismissal path (save, cancel,
-    // back button, tapping outside), so disposing afterwards here always
-    // runs exactly once, however the dialog was closed.
+    // Controllers are owned by DisposeOnUnmount below: disposed exactly
+    // once, however the dialog was closed, and only after it has fully
+    // left the screen (disposing in showDialog().then() crashed when the
+    // dialog rebuilt during its closing animation).
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => DisposeOnUnmount(
+        // Controllers are disposed when the dialog is really unmounted
+        // (after its closing animation), not when pop() completes.
+        disposables: [titleController, contentController],
+        child: AlertDialog(
         backgroundColor: Colors.amber.shade50,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
@@ -228,10 +232,8 @@ class _NotesScreenState extends State<NotesScreen> {
           ),
         ],
       ),
-    ).then((_) {
-      titleController.dispose();
-      contentController.dispose();
-    });
+      ),
+    );
   }
 
   void _deleteNote(Note note) {

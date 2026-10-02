@@ -1,5 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
-// NOTE: hand-updated to add HiveField(5) category on SaleItem. If you
+// NOTE: hand-updated to add HiveField(5) category on SaleItem,
+// HiveField(5) debtKey on Sale and SaleSource.debtSettlement (2). If you
 // re-run build_runner, it will regenerate an equivalent file from
 // sale.dart.
 
@@ -77,14 +78,16 @@ class SaleAdapter extends TypeAdapter<Sale> {
       totalAmount: fields[1] as double,
       totalProfit: fields[2] as double,
       createdAt: fields[3] as DateTime,
-      source: fields[4] as SaleSource,
+      // Older records may lack these keys - fall back safely.
+      source: (fields[4] as SaleSource?) ?? SaleSource.pos,
+      debtKey: fields[5] as int?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Sale obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(6)
       ..writeByte(0)
       ..write(obj.items)
       ..writeByte(1)
@@ -94,7 +97,9 @@ class SaleAdapter extends TypeAdapter<Sale> {
       ..writeByte(3)
       ..write(obj.createdAt)
       ..writeByte(4)
-      ..write(obj.source);
+      ..write(obj.source)
+      ..writeByte(5)
+      ..write(obj.debtKey);
   }
 
   @override
@@ -119,6 +124,8 @@ class SaleSourceAdapter extends TypeAdapter<SaleSource> {
         return SaleSource.pos;
       case 1:
         return SaleSource.debtPayment;
+      case 2:
+        return SaleSource.debtSettlement;
       default:
         return SaleSource.pos;
     }
@@ -132,6 +139,9 @@ class SaleSourceAdapter extends TypeAdapter<SaleSource> {
         break;
       case SaleSource.debtPayment:
         writer.writeByte(1);
+        break;
+      case SaleSource.debtSettlement:
+        writer.writeByte(2);
         break;
     }
   }

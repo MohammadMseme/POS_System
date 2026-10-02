@@ -1,4 +1,8 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
+// NOTE: hand-updated to add HiveFields 9-12 (capital recovery tracking).
+// Older records simply lack those keys and read safe defaults. If you
+// re-run build_runner, it will regenerate an equivalent file from
+// debt.dart.
 
 part of 'debt.dart';
 
@@ -23,16 +27,22 @@ class DebtAdapter extends TypeAdapter<Debt> {
       remainingAmount: fields[3] as double,
       itemsTaken: (fields[4] as List).cast<String>(),
       createdAt: fields[5] as DateTime,
-      saleItems: (fields[6] as List).cast<SaleItem>(),
-      totalProfit: fields[7] as double,
-      isPaid: fields[8] as bool,
+      // .toList() keeps the list growable so new credit purchases can be
+      // merged into an existing debt account.
+      saleItems: (fields[6] as List?)?.cast<SaleItem>().toList(),
+      totalProfit: (fields[7] as double?) ?? 0.0,
+      isPaid: (fields[8] as bool?) ?? false,
+      recoveredCapital: fields[9] as double?,
+      realizedProfit: fields[10] as double?,
+      legacyReleasedRatio: (fields[11] as double?) ?? 0.0,
+      legacyItemCount: (fields[12] as int?) ?? 0,
     );
   }
 
   @override
   void write(BinaryWriter writer, Debt obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(13)
       ..writeByte(0)
       ..write(obj.customerName)
       ..writeByte(1)
@@ -50,7 +60,15 @@ class DebtAdapter extends TypeAdapter<Debt> {
       ..writeByte(7)
       ..write(obj.totalProfit)
       ..writeByte(8)
-      ..write(obj.isPaid);
+      ..write(obj.isPaid)
+      ..writeByte(9)
+      ..write(obj.recoveredCapital)
+      ..writeByte(10)
+      ..write(obj.realizedProfit)
+      ..writeByte(11)
+      ..write(obj.legacyReleasedRatio)
+      ..writeByte(12)
+      ..write(obj.legacyItemCount);
   }
 
   @override

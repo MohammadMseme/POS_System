@@ -94,6 +94,10 @@ class ProductProvider extends ChangeNotifier {
       if (newProduct.shelfNumber != null && newProduct.shelfNumber!.trim().isNotEmpty) {
         existingByName.shelfNumber = newProduct.shelfNumber!.trim();
       }
+      // NEW: same rule for the optional wholesale reference price.
+      if (newProduct.hasWholesalePrice) {
+        existingByName.wholesalePrice = newProduct.wholesalePrice;
+      }
       existingByName.save();
       return 'updated_existing';
     }
@@ -106,6 +110,9 @@ class ProductProvider extends ChangeNotifier {
       }
       if (newProduct.shelfNumber != null && newProduct.shelfNumber!.trim().isNotEmpty) {
         existingByBarcode.shelfNumber = newProduct.shelfNumber!.trim();
+      }
+      if (newProduct.hasWholesalePrice) {
+        existingByBarcode.wholesalePrice = newProduct.wholesalePrice;
       }
       existingByBarcode.save();
       return 'updated_existing';
@@ -156,6 +163,9 @@ class ProductProvider extends ChangeNotifier {
     required int stockQuantity,
     String? category,
     String? shelfNumber,
+    // NEW: optional wholesale reference price (null clears it). Purely
+    // informational - never used in any calculation.
+    double? wholesalePrice,
   }) async {
     final trimmedOldKey = oldBarcode.trim();
     final rawNewBarcode = barcode.trim();
@@ -178,6 +188,8 @@ class ProductProvider extends ChangeNotifier {
     product.stockQuantity = stockQuantity;
     product.category = category;
     product.shelfNumber = shelfNumber;
+    product.wholesalePrice =
+        (wholesalePrice != null && wholesalePrice > 0) ? wholesalePrice : null;
 
     if (barcodeChanged) {
       await product.delete();

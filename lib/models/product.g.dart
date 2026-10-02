@@ -1,6 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // NOTE: hand-updated to add HiveField(6) category and HiveField(7)
-// shelfNumber. If you re-run build_runner, it will regenerate an
+// shelfNumber, and HiveField(8) wholesalePrice. If you re-run build_runner, it will regenerate an
 // equivalent file from product.dart.
 
 part of 'product.dart';
@@ -31,13 +31,15 @@ class ProductAdapter extends TypeAdapter<Product> {
       // means "not set" everywhere in the UI).
       category: fields[6] as String?,
       shelfNumber: fields[7] as String?,
+      // HiveField(8) added later - older records lack it and read null.
+      wholesalePrice: (fields[8] as num?)?.toDouble(),
     );
   }
 
   @override
   void write(BinaryWriter writer, Product obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(9)
       ..writeByte(0)
       ..write(obj.barcode)
       ..writeByte(1)
@@ -53,7 +55,9 @@ class ProductAdapter extends TypeAdapter<Product> {
       ..writeByte(6)
       ..write(obj.category)
       ..writeByte(7)
-      ..write(obj.shelfNumber);
+      ..write(obj.shelfNumber)
+      ..writeByte(8)
+      ..write(obj.wholesalePrice);
   }
 
   @override

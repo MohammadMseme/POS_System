@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../providers/pos_provider.dart';
 import '../providers/product_provider.dart';
 import '../providers/debt_supplier_provider.dart';
+import '../providers/auth_provider.dart';
+import '../widgets/wholesale_price_reveal.dart';
 
 /// Restricts a text field to a non-negative decimal number with at most
 /// two decimal places (e.g. "5", "5.5", "10.25"), rejecting anything
@@ -34,6 +36,9 @@ class PosScreen extends StatefulWidget {
 class _PosScreenState extends State<PosScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+  // FIXED: blocks a second cash checkout while the first one is still
+  // being written (a fast double click used to record the sale twice).
+  bool _checkoutInProgress = false;
 
   @override
   void dispose() {
@@ -179,166 +184,18 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  // CHANGED: the credit-sale dialog is now its own StatefulWidget
+  // (_CreditSaleDialog, bottom of this file) so it can own the debtor
+  // name controller + focus node used by the autocomplete and dispose
+  // them safely after the dialog's exit animation.
   void _showDebtDialog(
     BuildContext context,
     PosProvider posProvider,
   ) {
-    final nameController = TextEditingController();
-
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-        ),
-        title: Row(
-          children: [
-            Icon(
-              Icons.assignment_ind_outlined,
-              color: Colors.orange.shade800,
-            ),
-            const SizedBox(width: 10),
-            const Text(
-              'تسجيل فاتورة دين / آجل',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                children: [
-                  const Text(
-                    'المبلغ الإجمالي للدين',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.black54,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    '${posProvider.totalAmount.toStringAsFixed(2)} شيكل',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.orange.shade900,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameController,
-              decoration: InputDecoration(
-                labelText: 'اسم الزبون المدين',
-                prefixIcon: const Icon(Icons.person_outline),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange.shade800,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 18,
-                vertical: 12,
-              ),
-            ),
-            icon: const Icon(Icons.check),
-            label: const Text('تأكيد الدين'),
-            onPressed: () async {
-              if (nameController.text.trim().isEmpty) return;
-
-              // Captured before the async gap, while both contexts are
-              // still guaranteed valid.
-              final debtProvider = Provider.of<DebtSupplierProvider>(
-                context,
-                listen: false,
-              );
-              final customerName = nameController.text.trim();
-
-              bool success = false;
-              Object? error;
-
-              try {
-                success = await posProvider.completeSaleAsDebt(
-                  customerName,
-                  debtProvider,
-                );
-              } catch (e) {
-                error = e;
-              }
-
-              // FIX (use_build_context_synchronously): after the await
-              // above, TWO different BuildContexts are used below - the
-              // dialog's own `ctx` (to pop it) and the screen's `context`
-              // (to show a SnackBar on the screen underneath). Each one
-              // needs its OWN `.mounted` check immediately before use;
-              // checking only `ctx.mounted` does not guarantee `context`
-              // is still safe to use, and vice-versa.
-              if (!ctx.mounted) return;
-
-              if (success) {
-                Navigator.pop(ctx);
-
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'تم تسجيل الدين بنجاح وتحويل الفاتورة لصفحة الديون',
-                    ),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              } else if (error != null) {
-                Navigator.pop(ctx);
-
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'تم تسجيل الدين، لكن حدث خطأ أثناء تحديث المخزون: $error',
-                    ),
-                    backgroundColor: Colors.orange,
-                  ),
-                );
-              } else {
-                // Insufficient stock: keep the dialog open so the user
-                // can adjust the cart, exactly as before - just surface
-                // the message.
-                if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'تعذر إتمام العملية: الكمية المطلوبة لم تعد متوفرة بالكامل في المخزون',
-                    ),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-          ),
-        ],
-      ),
-    ).then((_) => nameController.dispose());
+      builder: (_) => _CreditSaleDialog(posProvider: posProvider),
+    );
   }
 
   Widget _buildCartHeader() {
@@ -633,13 +490,20 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ),
 
+          // NEW: tap the unit price to reveal the product's optional
+          // wholesale price (reference for manual discounting only).
           SizedBox(
             width: 105,
-            child: Text(
-              '${item.sellPrice.toStringAsFixed(2)} شيكل',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontWeight: FontWeight.w500,
+            child: Center(
+              child: WholesalePriceReveal(
+                priceText: '${item.sellPrice.toStringAsFixed(2)} شيكل',
+                wholesalePrice: item.product.wholesalePrice,
+                currency: 'شيكل',
+                vertical: true,
+                textAlign: TextAlign.center,
+                priceStyle: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ),
@@ -1105,17 +969,24 @@ class _PosScreenState extends State<PosScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  onPressed: posProvider.cart.isEmpty
+                  onPressed: (posProvider.cart.isEmpty || _checkoutInProgress)
                       ? null
                       : () async {
                           bool success = false;
                           Object? error;
 
+                          setState(() => _checkoutInProgress = true);
                           try {
                             success =
                                 await posProvider.completeSale();
                           } catch (e) {
                             error = e;
+                          } finally {
+                            if (mounted) {
+                              setState(() => _checkoutInProgress = false);
+                            } else {
+                              _checkoutInProgress = false;
+                            }
                           }
 
                           // FIX (use_build_context_synchronously):
@@ -1200,6 +1071,326 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Credit sale (بيع بالدين) dialog with an autocomplete of existing
+/// debtors, so a purchase is linked to the customer's existing debt
+/// account instead of creating a near-duplicate name.
+class _CreditSaleDialog extends StatefulWidget {
+  final PosProvider posProvider;
+
+  const _CreditSaleDialog({required this.posProvider});
+
+  @override
+  State<_CreditSaleDialog> createState() => _CreditSaleDialogState();
+}
+
+class _CreditSaleDialogState extends State<_CreditSaleDialog> {
+  final TextEditingController _nameController = TextEditingController();
+  final FocusNode _nameFocus = FocusNode();
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController.addListener(_onNameChanged);
+  }
+
+  void _onNameChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _nameController.removeListener(_onNameChanged);
+    _nameController.dispose();
+    _nameFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    final customerName = _nameController.text.trim();
+    if (customerName.isEmpty || _submitting) return;
+
+    final debtProvider = Provider.of<DebtSupplierProvider>(context, listen: false);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    // Captured before the await; after it we only pop if this dialog is
+    // still the top route (never the POS screen underneath it).
+    final dialogRoute = ModalRoute.of(context);
+    bool closeDialog() {
+      if (dialogRoute != null && dialogRoute.isCurrent) {
+        navigator.pop();
+        return true;
+      }
+      return false;
+    }
+
+    setState(() => _submitting = true);
+
+    bool success = false;
+    Object? error;
+    try {
+      success = await widget.posProvider.completeSaleAsDebt(
+        customerName,
+        debtProvider,
+      );
+    } catch (e) {
+      error = e;
+    }
+
+    // No early `return` on !mounted here: the sale is already saved, so
+    // the confirmation must still be shown. Everything used below was
+    // captured before the await (messenger / navigator / dialogRoute).
+    if (success) {
+      closeDialog();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('تم تسجيل الدين على "$customerName" بنجاح وتحويل الفاتورة لصفحة الديون'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else if (error != null) {
+      closeDialog();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('تم تسجيل الدين، لكن حدث خطأ أثناء تحديث المخزون: $error'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    } else {
+      // Insufficient stock: keep the dialog open so the user can adjust.
+      if (mounted) setState(() => _submitting = false);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'تعذر إتمام العملية: الكمية المطلوبة لم تعد متوفرة بالكامل في المخزون',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final debtProvider = Provider.of<DebtSupplierProvider>(context, listen: false);
+    // NEW (roles): the Employee only gets suggestions after typing 3
+    // letters (never the whole debtor list) and never sees balances.
+    final bool isAdmin = Provider.of<AuthProvider>(context, listen: false).isAdmin;
+    final typedName = _nameController.text.trim();
+    final existingAccount = debtProvider.findOpenDebtByName(typedName);
+
+    // While the sale is being saved the dialog cannot be dismissed (back
+    // button / tapping outside), so it can never close mid-transaction.
+    return PopScope(
+      canPop: !_submitting,
+      child: AlertDialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+      ),
+      title: Row(
+        children: [
+          Icon(
+            Icons.assignment_ind_outlined,
+            color: Colors.orange.shade800,
+          ),
+          const SizedBox(width: 10),
+          const Text(
+            'تسجيل فاتورة دين / آجل',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  const Text(
+                    'المبلغ الإجمالي للدين',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '${widget.posProvider.totalAmount.toStringAsFixed(2)} شيكل',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange.shade900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            RawAutocomplete<DebtorSuggestion>(
+              textEditingController: _nameController,
+              focusNode: _nameFocus,
+              displayStringForOption: (option) => option.name,
+              optionsBuilder: (TextEditingValue value) {
+                if (!isAdmin && value.text.trim().length < 3) {
+                  return const Iterable<DebtorSuggestion>.empty();
+                }
+                return debtProvider.searchDebtors(value.text, limit: isAdmin ? 8 : 5);
+              },
+              onSelected: (_) => _nameFocus.unfocus(),
+              fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                return TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'اسم الزبون المدين',
+                    hintText: 'اكتب للبحث في الزبائن المسجلين...',
+                    prefixIcon: const Icon(Icons.person_search_outlined),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onSubmitted: (_) => onFieldSubmitted(),
+                );
+              },
+              optionsViewBuilder: (context, onSelected, options) {
+                return Align(
+                  alignment: AlignmentDirectional.topStart,
+                  child: Material(
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(12),
+                    clipBehavior: Clip.antiAlias,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 260, maxWidth: 420),
+                      child: ListView.separated(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        shrinkWrap: true,
+                        itemCount: options.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final option = options.elementAt(index);
+                          return ListTile(
+                            dense: true,
+                            leading: CircleAvatar(
+                              radius: 16,
+                              backgroundColor: option.hasOpenAccount
+                                  ? Colors.orange.shade50
+                                  : Colors.grey.shade100,
+                              child: Icon(
+                                Icons.person_outline,
+                                size: 18,
+                                color: option.hasOpenAccount
+                                    ? Colors.orange.shade800
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                            title: Text(
+                              option.name,
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: Text(
+                              option.hasOpenAccount
+                                  ? (isAdmin
+                                      ? 'حساب مفتوح • المتبقي: ${option.remaining.toStringAsFixed(2)} شيكل'
+                                      : 'حساب مفتوح')
+                                  : 'زبون سابق • لا يوجد دين حالي',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: option.hasOpenAccount
+                                    ? Colors.red.shade700
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                            onTap: () => onSelected(option),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            if (typedName.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: (existingAccount != null ? Colors.blue : Colors.green)
+                      .withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      existingAccount != null
+                          ? Icons.link_outlined
+                          : Icons.person_add_alt_1_outlined,
+                      size: 16,
+                      color: existingAccount != null
+                          ? Colors.blue.shade700
+                          : Colors.green.shade700,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        existingAccount != null
+                            ? 'ستُضاف الفاتورة إلى حساب "${existingAccount.customerName}" المفتوح'
+                                '${isAdmin ? ' (المتبقي حالياً: ${existingAccount.remainingAmount.toStringAsFixed(2)} شيكل)' : ''}'
+                            : 'سيتم فتح حساب دين جديد بهذا الاسم',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: existingAccount != null
+                              ? Colors.blue.shade800
+                              : Colors.green.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.orange.shade800,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 18,
+              vertical: 12,
+            ),
+          ),
+          icon: _submitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.check),
+          label: const Text('تأكيد الدين'),
+          onPressed: (typedName.isEmpty || _submitting) ? null : _confirm,
+        ),
+      ],
       ),
     );
   }

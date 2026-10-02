@@ -29,6 +29,9 @@ class _OrderRow {
   final TextEditingController nameCtrl = TextEditingController();
   final TextEditingController costCtrl = TextEditingController();
   final TextEditingController sellCtrl = TextEditingController();
+  // NEW: optional wholesale price (سعر البيع بالجملة) for this row only -
+  // saved on the Product exactly like the single "Add Product" form.
+  final TextEditingController wholesaleCtrl = TextEditingController();
   final TextEditingController qtyCtrl = TextEditingController();
   final TextEditingController categoryCtrl = TextEditingController();
   final TextEditingController shelfCtrl = TextEditingController();
@@ -38,6 +41,7 @@ class _OrderRow {
     nameCtrl.dispose();
     costCtrl.dispose();
     sellCtrl.dispose();
+    wholesaleCtrl.dispose();
     qtyCtrl.dispose();
     categoryCtrl.dispose();
     shelfCtrl.dispose();
@@ -59,6 +63,7 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
   static const double _wName = 220;
   static const double _wCost = 110;
   static const double _wSell = 110;
+  static const double _wWholesale = 120;
   static const double _wQty = 90;
   static const double _wCategory = 150;
   static const double _wShelf = 120;
@@ -66,7 +71,8 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
   static const double _cellGap = 8;
 
   static double get _tableWidth =>
-      _wBarcode + _wName + _wCost + _wSell + _wQty + _wCategory + _wShelf + _wDelete + (_cellGap * 8);
+      _wBarcode + _wName + _wCost + _wSell + _wWholesale + _wQty + _wCategory + _wShelf + _wDelete +
+      (_cellGap * 9);
 
   @override
   void initState() {
@@ -138,6 +144,10 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
         invalidRowLabels.add('$rowName (سعر البيع مطلوب وغير صالح)');
       } else if (qty == null || qty <= 0) {
         invalidRowLabels.add('$rowName (كمية غير صالحة)');
+      } else if (row.wholesaleCtrl.text.trim().isNotEmpty &&
+          (double.tryParse(row.wholesaleCtrl.text.trim()) ?? -1) < 0) {
+        // Optional column: only validated when something was typed.
+        invalidRowLabels.add('$rowName (سعر الجملة غير صالح)');
       }
     }
 
@@ -178,6 +188,10 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
           row.categoryCtrl.text.trim().isEmpty ? null : row.categoryCtrl.text.trim();
       final String? shelf =
           row.shelfCtrl.text.trim().isEmpty ? null : row.shelfCtrl.text.trim();
+      // Optional, informational only (never used in any calculation).
+      final double? parsedWholesale = double.tryParse(row.wholesaleCtrl.text.trim());
+      final double? wholesale =
+          (parsedWholesale != null && parsedWholesale > 0) ? parsedWholesale : null;
 
       final product = Product(
         barcode: row.barcodeCtrl.text.trim().isEmpty
@@ -189,6 +203,7 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
         stockQuantity: qty,
         category: category,
         shelfNumber: shelf,
+        wholesalePrice: wholesale,
       );
 
       final result = productProvider.addProductWithRules(product);
@@ -522,6 +537,9 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
                           // mandatory columns.
                           _headerCell('سعر البيع', _wSell, required: true),
                           const SizedBox(width: _cellGap),
+                          // NEW: optional per-row wholesale price.
+                          _headerCell('سعر الجملة (اختياري)', _wWholesale),
+                          const SizedBox(width: _cellGap),
                           _headerCell('الكمية', _wQty, required: true),
                           const SizedBox(width: _cellGap),
                           _headerCell('القسم (اختياري)', _wCategory),
@@ -548,6 +566,8 @@ class _BulkOrderScreenState extends State<BulkOrderScreen> {
                               // of "اختياري" - the field is validated as
                               // mandatory in _save() above.
                               _textCell(row.sellCtrl, _wSell, numeric: true, decimal: true, hint: 'مطلوب'),
+                              const SizedBox(width: _cellGap),
+                              _textCell(row.wholesaleCtrl, _wWholesale, numeric: true, decimal: true, hint: 'اختياري'),
                               const SizedBox(width: _cellGap),
                               _textCell(row.qtyCtrl, _wQty, numeric: true, hint: '0'),
                               const SizedBox(width: _cellGap),

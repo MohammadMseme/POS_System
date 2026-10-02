@@ -32,21 +32,95 @@ class DebtSupplierProvider extends ChangeNotifier {
   List<Supplier> get archivedSuppliers =>
       suppliers.where((s) => s.isPaid).toList();
 
+  /// NEW: every debtor name ever registered (open accounts first), used by
+  /// the POS autocomplete so a credit sale can be linked to an existing
+  /// debtor account instead of accidentally creating a near-duplicate.
+  List<DebtorSuggestion> searchDebtors(String query, {int limit = 8}) {
+    final q = query.trim().toLowerCase();
+    final Map<String, DebtorSuggestion> byName = {};
+
+    for (final d in debts) {
+      final display = d.customerName.trim();
+      final norm = display.toLowerCase();
+      if (norm.isEmpty) continue;
+      if (q.isNotEmpty && !norm.contains(q)) continue;
+
+      final current = byName[norm];
+      final open = !d.isPaid;
+      if (current == null) {
+        byName[norm] = DebtorSuggestion(
+          name: display,
+          remaining: open ? d.remainingAmount : 0.0,
+          hasOpenAccount: open,
+        );
+      } else {
+        byName[norm] = DebtorSuggestion(
+          // prefer the spelling of the open account
+          name: open ? display : current.name,
+          remaining: current.remaining + (open ? d.remainingAmount : 0.0),
+          hasOpenAccount: current.hasOpenAccount || open,
+        );
+      }
+    }
+
+    final list = byName.values.toList()
+      ..sort((a, b) {
+        if (a.hasOpenAccount != b.hasOpenAccount) {
+          return a.hasOpenAccount ? -1 : 1;
+        }
+        if (q.isNotEmpty) {
+          final aStarts = a.name.toLowerCase().startsWith(q);
+          final bStarts = b.name.toLowerCase().startsWith(q);
+          if (aStarts != bStarts) return aStarts ? -1 : 1;
+        }
+        return a.name.compareTo(b.name);
+      });
+
+    return list.length > limit ? list.sublist(0, limit) : list;
+  }
+
+  /// Returns the open (unpaid) debt account for [name], if any.
+  Debt? findOpenDebtByName(String name) {
+    final norm = name.trim().toLowerCase();
+    if (norm.isEmpty) return null;
+    for (final d in debts) {
+      if (!d.isPaid && d.customerName.trim().toLowerCase() == norm) return d;
+    }
+    return null;
+  }
+
   DebtSupplierProvider() {
     _init();
   }
 
   Future<void> _init() async {
-    _debtBox = Hive.isBoxOpen('debts') 
-        ? Hive.box<Debt>('debts') 
+    _debtBox = Hive.isBoxOpen('debts')
+        ? Hive.box<Debt>('debts')
         : await Hive.openBox<Debt>('debts');
-        
-    _supplierBox = Hive.isBoxOpen('suppliers') 
-        ? Hive.box<Supplier>('suppliers') 
+
+    _supplierBox = Hive.isBoxOpen('suppliers')
+        ? Hive.box<Supplier>('suppliers')
         : await Hive.openBox<Supplier>('suppliers');
+
+    await _migrateDebtTracking();
 
     loadDebts();
     loadSuppliers();
+  }
+
+  /// Safety net for the start-up migration in HiveService.init (see
+  /// [Debt.ensureTracking]). Only touches debts that still lack the
+  /// capital-recovery counters, so normally it does nothing.
+  Future<void> _migrateDebtTracking() async {
+    if (_debtBox == null || !_debtBox!.isOpen) return;
+    for (final debt in _debtBox!.values.toList()) {
+      try {
+        if (debt.ensureTracking()) await debt.save();
+      } catch (e, stack) {
+        debugPrint('[DebtSupplierProvider] Debt migration skipped: $e');
+        debugPrint('$stack');
+      }
+    }
   }
 
   void loadDebts() {
@@ -83,81 +157,155 @@ class DebtSupplierProvider extends ChangeNotifier {
       }
 
       if (existingDebt != null) {
+        existingDebt.ensureTracking();
         existingDebt.totalAmount += newDebt.totalAmount;
         existingDebt.remainingAmount += newDebt.remainingAmount;
         existingDebt.itemsTaken.addAll(newDebt.itemsTaken);
+        // The newly merged items carry new cost: the account goes back to
+        // "capital not recovered" until payments cover that cost too.
         existingDebt.saleItems.addAll(newDebt.saleItems);
         existingDebt.totalProfit += newDebt.totalProfit;
         await existingDebt.save();
       } else {
+        newDebt.recoveredCapital ??= 0.0;
+        newDebt.realizedProfit ??= 0.0;
         await _debtBox!.add(newDebt);
       }
-      
+
       loadDebts();
     }
   }
 
-  // عند سداد الدين: يتم تسجيل الجزء المسدد كعملية بيع حقيقية في الجرد والأرباح
-  Future<void> payCustomerDebt(Debt debt, double amount) async {
-    if (amount <= 0 || debt.totalAmount <= 0) return;
-
-    // حساب نسبة المبلغ المسدد من إجمالي الدين
-    double paymentRatio = amount / debt.totalAmount;
-    if (paymentRatio > 1.0) paymentRatio = 1.0;
-
-    // استخراج الأصناف والأرباح الخاصة بالدفعة المسددة
-    List<SaleItem> paidSaleItems = debt.saleItems.map((item) {
-      int proportionalQty = (item.quantity * paymentRatio).round();
-      if (proportionalQty < 1 && item.quantity > 0 && paymentRatio > 0) {
-        proportionalQty = 1;
-      }
-      if (proportionalQty > item.quantity) proportionalQty = item.quantity;
-
-      return SaleItem(
-        name: item.name,
-        costPrice: item.costPrice,
-        sellPrice: item.sellPrice,
-        quantity: proportionalQty,
-        discountPerUnit: item.discountPerUnit,
-        category: item.category,
-      );
-    }).where((item) => item.quantity > 0).toList();
-
-    double paidProfit = debt.totalProfit * paymentRatio;
-    double paidTotalAmount = debt.totalAmount * paymentRatio;
-
-    // إرسال هذه الدفعة لصندوق المبيعات لتظهر في الأرباح والجرد بشكل طبيعي
-    if (paidSaleItems.isNotEmpty) {
-      final salesBox = Hive.box<Sale>('sales');
-      try {
-        await salesBox.add(Sale(
-          items: paidSaleItems,
-          totalAmount: paidTotalAmount,
-          totalProfit: paidProfit,
-          createdAt: DateTime.now(),
-          // Marked distinctly from a real POS sale so reports can tell
-          // debt collections apart from register sales.
-          source: SaleSource.debtPayment,
-        ));
-      } catch (e, stack) {
-        debugPrint('[DebtSupplierProvider] Failed to record debt-payment sale: $e');
-        debugPrint('$stack');
-        rethrow;
-      }
+  /// Registers a customer payment against [debt].
+  ///
+  /// NEW financial rules (credit sales / البيع بالدين):
+  ///  * The paid amount is added to Total Sales (إجمالي المبيعات)
+  ///    immediately, as an item-less `SaleSource.debtPayment` record.
+  ///  * The money first recovers the cost price (رأس المال) of the items
+  ///    sold on credit. Only after the full cost is recovered do further
+  ///    payments count towards Net Profit.
+  ///  * The items do NOT appear in the sales records while the debt is
+  ///    open. When the balance is fully paid, ONE `debtSettlement` record
+  ///    is written with all the items (amount/profit = 0, since the money
+  ///    was already counted), so they appear just like a cash sale.
+  ///  * A payment larger than the remaining balance is capped to it.
+  ///
+  /// Example: cost 100, price 200. Pay 50 -> sales +50, profit +0
+  /// (capital 50/100). Pay 70 -> sales +70, profit +20 (capital
+  /// recovered). Pay 80 -> sales +80, profit +80, debt settled.
+  Future<DebtPaymentResult> payCustomerDebt(Debt debt, double amount) async {
+    if (amount <= 0 || debt.isPaid || debt.remainingAmount <= 0) {
+      return const DebtPaymentResult.none();
     }
 
-    debt.paidAmount += amount;
+    debt.ensureTracking();
+
+    const double eps = 0.005;
+    final double remainingBefore = debt.remainingAmount;
+    final double applied = amount > remainingBefore ? remainingBefore : amount;
+    final bool settles = (remainingBefore - applied) <= eps;
+    final bool capitalWasRecovered = debt.isCapitalRecovered;
+
+    // Only the part of the debt backed by real POS items is counted as
+    // sales (a pure manual debt has no items and keeps old behavior).
+    final double countedSoFar = debt.capitalRecovered + debt.profitRealized;
+    double countable = debt.itemsSaleValue - countedSoFar;
+    if (countable < 0) countable = 0;
+    if (countable > applied) countable = applied;
+
+    double toCapital;
+    double toProfit;
+    if (settles && debt.saleItems.isNotEmpty) {
+      // Final payment: close the books exactly, including the (rare) case
+      // of items sold below cost where the total profit is negative.
+      toProfit = debt.totalProfit - debt.profitRealized;
+      toCapital = countable - toProfit;
+    } else {
+      final double capitalNeeded = debt.capitalRemaining;
+      toCapital = countable < capitalNeeded ? countable : capitalNeeded;
+      toProfit = countable - toCapital;
+    }
+
+    final int? debtKey = debt.key is int ? debt.key as int : null;
+    final salesBox = Hive.box<Sale>('sales');
+
+    try {
+      if (countable > 0 || toProfit.abs() > eps) {
+        await salesBox.add(Sale(
+          items: <SaleItem>[],
+          totalAmount: countable,
+          totalProfit: toProfit,
+          createdAt: DateTime.now(),
+          source: SaleSource.debtPayment,
+          debtKey: debtKey,
+        ));
+      }
+
+      if (settles) {
+        final settledItems = _itemsForSettlement(debt);
+        if (settledItems.isNotEmpty) {
+          await salesBox.add(Sale(
+            items: settledItems,
+            totalAmount: 0.0,
+            totalProfit: 0.0,
+            createdAt: DateTime.now(),
+            source: SaleSource.debtSettlement,
+            debtKey: debtKey,
+          ));
+        }
+      }
+    } catch (e, stack) {
+      debugPrint('[DebtSupplierProvider] Failed to record debt payment: $e');
+      debugPrint('$stack');
+      rethrow;
+    }
+
+    debt.recoveredCapital = debt.capitalRecovered + toCapital;
+    debt.realizedProfit = debt.profitRealized + toProfit;
+    debt.paidAmount += applied;
     debt.remainingAmount = debt.totalAmount - debt.paidAmount;
 
-    if (debt.remainingAmount <= 0) {
-      // Archive instead of delete: preserve debt/customer history so it
-      // remains queryable (e.g. "how much has this customer ever owed").
+    if (settles || debt.remainingAmount <= eps) {
+      // Archive instead of delete: preserve debt/customer history.
       debt.remainingAmount = 0;
       debt.isPaid = true;
     }
     await debt.save();
 
     loadDebts();
+
+    return DebtPaymentResult(
+      amountApplied: applied,
+      countedAsSales: countable,
+      toCapital: toCapital,
+      toProfit: toProfit,
+      capitalJustRecovered: !capitalWasRecovered && debt.isCapitalRecovered,
+      settled: debt.isPaid,
+    );
+  }
+
+  /// Items to release into the sales records when a debt is fully paid.
+  /// For debts that older versions already partly released (see
+  /// [Debt.legacyReleasedRatio]) only the not-yet-shown quantity is used.
+  List<SaleItem> _itemsForSettlement(Debt debt) {
+    final List<SaleItem> result = [];
+    for (int i = 0; i < debt.saleItems.length; i++) {
+      final item = debt.saleItems[i];
+      int qty = item.quantity;
+      if (i < debt.legacyItemCount && debt.legacyReleasedRatio > 0) {
+        qty -= (item.quantity * debt.legacyReleasedRatio).round();
+      }
+      if (qty <= 0) continue;
+      result.add(SaleItem(
+        name: item.name,
+        costPrice: item.costPrice,
+        sellPrice: item.sellPrice,
+        quantity: qty,
+        discountPerUnit: item.discountPerUnit,
+        category: item.category,
+      ));
+    }
+    return result;
   }
 
   /// Adds a debt to (or updates the debt of) a supplier/merchant, named
@@ -271,4 +419,47 @@ class DebtSupplierProvider extends ChangeNotifier {
     await supplier.save();
     loadSuppliers();
   }
+}
+
+/// Outcome of [DebtSupplierProvider.payCustomerDebt], so the UI can tell
+/// the user exactly how the payment was booked.
+class DebtPaymentResult {
+  final double amountApplied;
+  final double countedAsSales;
+  final double toCapital;
+  final double toProfit;
+  final bool capitalJustRecovered;
+  final bool settled;
+
+  const DebtPaymentResult({
+    required this.amountApplied,
+    required this.countedAsSales,
+    required this.toCapital,
+    required this.toProfit,
+    required this.capitalJustRecovered,
+    required this.settled,
+  });
+
+  const DebtPaymentResult.none()
+      : amountApplied = 0,
+        countedAsSales = 0,
+        toCapital = 0,
+        toProfit = 0,
+        capitalJustRecovered = false,
+        settled = false;
+
+  bool get isNone => amountApplied <= 0;
+}
+
+/// One debtor entry for the POS autocomplete.
+class DebtorSuggestion {
+  final String name;
+  final double remaining;
+  final bool hasOpenAccount;
+
+  const DebtorSuggestion({
+    required this.name,
+    required this.remaining,
+    required this.hasOpenAccount,
+  });
 }
