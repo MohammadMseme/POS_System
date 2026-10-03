@@ -762,7 +762,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 Expanded(
                   child: _StatCard(
                     icon: Icons.trending_up_rounded,
-                    title: 'إجمالي المبيعات',
+                    title: ' كاش',
                     value: '${netRevenue.toStringAsFixed(2)} ₪',
                     color: const Color(0xFF1565C0),
                     subtitle: totalSalesDeductionsInPeriod > 0

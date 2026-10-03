@@ -49,7 +49,7 @@ class HouseholdStoreApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'إدارة معرض الأدوات المنزلية',
+      title: 'FIKRA_STORE',
       debugShowCheckedModeBanner: false,
       locale: const Locale('ar', ''),
       // الثيم العام المطور والموحد لكل التطبيق باللون الأزرق العصري
